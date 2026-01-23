@@ -120,6 +120,44 @@ function generateMessage(info) {
   ].join("\n")
 }
 
+async function deleteLastNotification() {
+  const lastMessage = loadLastMessage() || {}
+
+  if (!lastMessage.message_id) {
+    console.log("🟢 Notification is not found.")
+    return
+  }
+
+  if (!TELEGRAM_BOT_TOKEN)
+    throw Error("❌ Missing telegram bot token or chat id.")
+  if (!TELEGRAM_CHAT_ID) throw Error("❌ Missing telegram chat id.")
+
+  console.log("🗑️ Deleting notification...")
+
+  try {
+    const response = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: TELEGRAM_CHAT_ID,
+          message_id: lastMessage.message_id,
+        }),
+      }
+    )
+
+    const data = await response.json()
+    if (data) {
+      deleteLastMessage()
+    }
+
+    console.log("🟢 Notification deleted.")
+  } catch (error) {
+    console.log("🔴 Notification not deleted.", error.message)
+  }
+}
+
 async function sendNotification(message) {
   if (!TELEGRAM_BOT_TOKEN)
     throw Error("❌ Missing telegram bot token or chat id.")
@@ -162,6 +200,10 @@ async function run() {
   if (isOutage && !isScheduled) {
     const message = generateMessage(info)
     await sendNotification(message)
+  }
+
+  if (!isOutage) {
+    await deleteLastNotification()
   }
 }
 
