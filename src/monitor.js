@@ -8,12 +8,7 @@ import {
   TELEGRAM_CHAT_ID,
 } from "./constants.js"
 
-import {
-  capitalize,
-  deleteLastMessage,
-  loadLastMessage,
-  saveLastMessage,
-} from "./helpers.js"
+import { capitalize, loadLastMessage, saveLastMessage } from "./helpers.js"
 
 async function getInfo() {
   console.log("🌀 Getting info...")
@@ -149,7 +144,7 @@ async function deleteLastNotification() {
 
     const data = await response.json()
     if (data) {
-      deleteLastMessage()
+      clearLastMessage()
     }
 
     console.log("🟢 Notification deleted.")
@@ -189,7 +184,7 @@ async function sendNotification(message) {
     console.log("🟢 Notification sent.")
   } catch (error) {
     console.log("🔴 Notification not sent.", error.message)
-    clearLastMessage()
+    deleteLastNotification()
   }
 }
 
