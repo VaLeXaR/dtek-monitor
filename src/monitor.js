@@ -189,7 +189,7 @@ async function sendNotification(message) {
     console.log("🟢 Notification sent.")
   } catch (error) {
     console.log("🔴 Notification not sent.", error.message)
-    deleteLastMessage()
+    clearLastMessage()
   }
 }
 
