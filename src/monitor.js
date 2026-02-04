@@ -174,6 +174,7 @@ async function sendNotification(message) {
           text: message,
           parse_mode: "HTML",
           message_id: lastMessage.message_id ?? undefined,
+          disable_notification: true,
         }),
       }
     )
