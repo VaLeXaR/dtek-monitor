@@ -1,0 +1,15 @@
+services:
+  monitor:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Kyiv
+    shm_size: 1gb
+    volumes:
+      - monitor-state:/app/artifacts
+
+volumes:
+  monitor-state:

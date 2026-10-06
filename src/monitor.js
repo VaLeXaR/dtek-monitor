@@ -8,7 +8,12 @@ import {
   TELEGRAM_CHAT_ID,
 } from "./constants.js"
 
-import { capitalize, loadLastMessage, saveLastMessage } from "./helpers.js"
+import {
+  capitalize,
+  clearLastMessage,
+  loadLastMessage,
+  saveLastMessage,
+} from "./helpers.js"
 
 async function getInfo() {
   console.log("🌀 Getting info...")
@@ -203,4 +208,7 @@ async function run() {
   }
 }
 
-run().catch((error) => console.error(error.message))
+run().catch((error) => {
+  console.error(error.message)
+  process.exitCode = 1
+})
