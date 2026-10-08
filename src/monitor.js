@@ -11,9 +11,29 @@ import {
 import {
   capitalize,
   clearLastMessage,
+  getCurrentTime,
+  loadEmergencyOutagesState,
   loadLastMessage,
+  saveEmergencyOutagesState,
   saveLastMessage,
 } from "./helpers.js"
+
+async function getEmergencyOutagesNotice(browserPage) {
+  console.log("🌀 Checking emergency outages notice...")
+
+  const notice = browserPage.locator(
+    ".m-attention__text > p:first-child"
+  )
+
+  try {
+    await notice.waitFor({ state: "visible", timeout: 3000 })
+    console.log("🚨 Emergency outages notice detected!")
+    return (await notice.innerText()).trim()
+  } catch {
+    console.log("🟢 Emergency outages notice is not found.")
+    return null
+  }
+}
 
 async function getInfo() {
   console.log("🌀 Getting info...")
@@ -25,6 +45,14 @@ async function getInfo() {
     await browserPage.goto(SHUTDOWNS_PAGE, {
       waitUntil: "load",
     })
+
+    const emergencyOutagesNotice =
+      await getEmergencyOutagesNotice(browserPage)
+
+    if (emergencyOutagesNotice) {
+      console.log("✅ Getting info finished.")
+      return { emergencyOutagesNotice }
+    }
 
     const csrfTokenTag = await browserPage.waitForSelector(
       'meta[name="csrf-token"]',
@@ -120,6 +148,16 @@ function generateMessage(info) {
   ].join("\n")
 }
 
+function generateEmergencyOutagesMessage(notice) {
+  console.log("🌀 Generating emergency outages message...")
+
+  return [
+    notice,
+    "",
+    `🔄 <i>Дата оновлення інформації – ${getCurrentTime()}</i>`,
+  ].join("\n")
+}
+
 async function deleteLastNotification() {
   const lastMessage = loadLastMessage() || {}
 
@@ -185,17 +223,44 @@ async function sendNotification(message) {
     )
 
     const data = await response.json()
+    if (!response.ok || !data.ok) {
+      throw Error(data.description || "Telegram API request failed.")
+    }
+
     saveLastMessage(data.result)
 
     console.log("🟢 Notification sent.")
+    return true
   } catch (error) {
     console.log("🔴 Notification not sent.", error.message)
-    deleteLastNotification()
+    await deleteLastNotification()
+    return false
   }
 }
 
 async function run() {
   const info = await getInfo()
+  const emergencyOutagesWereActive = loadEmergencyOutagesState()
+
+  if (info.emergencyOutagesNotice) {
+    saveEmergencyOutagesState(true)
+    const message = generateEmergencyOutagesMessage(
+      info.emergencyOutagesNotice
+    )
+    await sendNotification(message)
+    return
+  }
+
+  if (emergencyOutagesWereActive) {
+    const notificationSent = await sendNotification(
+      "Повертаємось до графіків, екстрені відключення скасовано."
+    )
+    if (notificationSent) {
+      saveEmergencyOutagesState(false)
+    }
+    return
+  }
+
   const isOutage = checkIsOutage(info)
   const isScheduled = checkIsScheduled(info)
   if (isOutage && !isScheduled) {

@@ -1,7 +1,10 @@
 import fs from "node:fs"
 import path from "node:path"
 
-import { LAST_MESSAGE_FILE } from "./constants.js"
+import {
+  EMERGENCY_OUTAGES_STATE_FILE,
+  LAST_MESSAGE_FILE,
+} from "./constants.js"
 
 export function capitalize(str) {
   if (typeof str !== "string") return ""
@@ -47,6 +50,26 @@ export function saveLastMessage({ date, message_id } = {}) {
 export function clearLastMessage() {
   fs.mkdirSync(path.dirname(LAST_MESSAGE_FILE), { recursive: true })
   fs.writeFileSync(LAST_MESSAGE_FILE, JSON.stringify({}))
+}
+
+export function loadEmergencyOutagesState() {
+  if (!fs.existsSync(EMERGENCY_OUTAGES_STATE_FILE)) return false
+
+  const state = JSON.parse(
+    fs.readFileSync(EMERGENCY_OUTAGES_STATE_FILE, "utf8").trim()
+  )
+
+  return state?.active === true
+}
+
+export function saveEmergencyOutagesState(active) {
+  fs.mkdirSync(path.dirname(EMERGENCY_OUTAGES_STATE_FILE), {
+    recursive: true,
+  })
+  fs.writeFileSync(
+    EMERGENCY_OUTAGES_STATE_FILE,
+    JSON.stringify({ active })
+  )
 }
 
 export function getCurrentTime() {
