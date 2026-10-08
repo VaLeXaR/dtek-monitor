@@ -1,6 +1,9 @@
+name: dtek-monitor
+
 services:
   monitor:
     build: .
+    container_name: dtek-monitor
     init: true
     restart: unless-stopped
     env_file:
@@ -13,3 +16,4 @@ services:
 
 volumes:
   monitor-state:
+    name: dtek-monitor_monitor-state
