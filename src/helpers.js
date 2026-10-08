@@ -5,6 +5,7 @@ import {
   EMERGENCY_OUTAGES_STATE_FILE,
   LAST_MESSAGE_FILE,
 } from "./constants.js"
+import { warn } from "./logger.js"
 
 function readJsonFile(file, fallback) {
   if (!fs.existsSync(file)) return fallback
@@ -13,7 +14,7 @@ function readJsonFile(file, fallback) {
     const contents = fs.readFileSync(file, "utf8").trim()
     return contents ? JSON.parse(contents) : fallback
   } catch (error) {
-    console.warn(`⚠️ State file is invalid: ${error.message}`)
+    warn(`⚠️ State file is invalid: ${error.message}`)
     return fallback
   }
 }
@@ -89,6 +90,28 @@ export function getEmergencyOutagesAction(notice, wereActive) {
   if (notice) return "send"
   if (wereActive) return "delete"
   return null
+}
+
+export function migrateEmergencyOutagesMessageState({
+  emergencyMessageFile,
+  emergencyStateFile = EMERGENCY_OUTAGES_STATE_FILE,
+  lastMessageFile = LAST_MESSAGE_FILE,
+} = {}) {
+  if (!emergencyMessageFile || fs.existsSync(emergencyMessageFile)) {
+    return false
+  }
+
+  if (!loadEmergencyOutagesState(emergencyStateFile)) return false
+
+  const lastMessage = loadLastMessage(lastMessageFile)
+  if (lastMessage) {
+    saveLastMessage(lastMessage, emergencyMessageFile)
+    clearLastMessage(lastMessageFile)
+  } else {
+    clearLastMessage(emergencyMessageFile)
+  }
+
+  return true
 }
 
 export function escapeHtml(value) {

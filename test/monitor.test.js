@@ -11,6 +11,10 @@ import {
   run,
   sendNotification,
 } from "../src/monitor.js"
+import {
+  EMERGENCY_OUTAGES_MESSAGE_FILE,
+  LAST_MESSAGE_FILE,
+} from "../src/constants.js"
 
 const house = "1"
 
@@ -120,6 +124,32 @@ test("closes the browser and reports a failed DTEK response", async () => {
   assert.equal(browserClosed, true)
 })
 
+test("gets address data even when a general emergency notice is visible", async () => {
+  const expectedInfo = createInfo("Аварійне")
+  const browserPage = {
+    evaluate: async () => expectedInfo,
+    goto: async () => {},
+    locator: () => ({
+      innerText: async () => "General emergency notice",
+      waitFor: async () => {},
+    }),
+    waitForSelector: async () => ({
+      getAttribute: async () => "csrf-token",
+    }),
+  }
+  const browserType = {
+    launch: async () => ({
+      close: async () => {},
+      newPage: async () => browserPage,
+    }),
+  }
+
+  assert.deepEqual(await getInfo({ browserType }), {
+    ...expectedInfo,
+    emergencyOutagesNotice: "General emergency notice",
+  })
+})
+
 test("deletes a Telegram notification only after a successful response", async () => {
   let cleared = false
   const deleted = await deleteLastNotification({
@@ -182,22 +212,30 @@ test("handles Telegram send errors without persisting a message", async () => {
   assert.equal(saved, false)
 })
 
-test("gives a general emergency notice priority over address checks", async () => {
+test("updates general emergency and address outage notifications independently", async () => {
   const savedStates = []
   const messages = []
   await run({
-    checkIsOutageFn: () => {
-      throw Error("address check must not run")
-    },
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => false,
     generateEmergencyOutagesMessageFn: (notice) => `notice: ${notice}`,
-    getInfoFn: async () => ({ emergencyOutagesNotice: "Emergency" }),
+    generateMessageFn: () => "address outage",
+    getInfoFn: async () => ({
+      ...createInfo("Аварійне"),
+      emergencyOutagesNotice: "Emergency",
+    }),
     loadEmergencyOutagesStateFn: () => false,
     saveEmergencyOutagesStateFn: (active) => savedStates.push(active),
-    sendNotificationFn: async (message) => messages.push(message),
+    sendNotificationFn: async (message, { lastMessageFile }) => {
+      messages.push([message, lastMessageFile])
+    },
   })
 
   assert.deepEqual(savedStates, [true])
-  assert.deepEqual(messages, ["notice: Emergency"])
+  assert.deepEqual(messages, [
+    ["notice: Emergency", EMERGENCY_OUTAGES_MESSAGE_FILE],
+    ["address outage", LAST_MESSAGE_FILE],
+  ])
 })
 
 test("sends only unscheduled address outage notifications", async () => {
@@ -240,21 +278,36 @@ test("deletes the previous address notification when no outage remains", async (
 
 test("resets emergency state only after its notification is deleted", async () => {
   const savedStates = []
+  const deletedFiles = []
   await run({
-    deleteLastNotificationFn: async () => true,
-    getInfoFn: async () => ({ emergencyOutagesNotice: null }),
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
+    deleteLastNotificationFn: async ({ lastMessageFile }) => {
+      deletedFiles.push(lastMessageFile)
+      return true
+    },
+    getInfoFn: async () => ({
+      ...createInfo("Планове"),
+      emergencyOutagesNotice: null,
+    }),
     loadEmergencyOutagesStateFn: () => true,
     saveEmergencyOutagesStateFn: (active) => savedStates.push(active),
   })
 
   assert.deepEqual(savedStates, [false])
+  assert.deepEqual(deletedFiles, [EMERGENCY_OUTAGES_MESSAGE_FILE])
 })
 
 test("keeps emergency state when its notification cannot be deleted", async () => {
   const savedStates = []
   await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async () => false,
-    getInfoFn: async () => ({ emergencyOutagesNotice: null }),
+    getInfoFn: async () => ({
+      ...createInfo("Планове"),
+      emergencyOutagesNotice: null,
+    }),
     loadEmergencyOutagesStateFn: () => true,
     saveEmergencyOutagesStateFn: (active) => savedStates.push(active),
   })

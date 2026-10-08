@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 
+log() {
+  printf '[%s] %s\n' "$(TZ=Europe/Kyiv date '+%Y-%m-%d %H:%M:%S Europe/Kyiv')" "$*"
+}
+
+log_error() {
+  log "$@" >&2
+}
+
 # Allow a single check or a diagnostic command via docker compose run.
 if [ "$#" -gt 0 ]; then
   exec "$@"
@@ -14,12 +22,12 @@ fi
 CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-600}
 case "$CHECK_INTERVAL_SECONDS" in
   *[!0-9]*|'')
-    echo "CHECK_INTERVAL_SECONDS must be a positive integer." >&2
+    log_error "CHECK_INTERVAL_SECONDS must be a positive integer."
     exit 1
     ;;
 esac
 if ! [ "$CHECK_INTERVAL_SECONDS" -gt 0 ] 2>/dev/null; then
-  echo "CHECK_INTERVAL_SECONDS must be a positive integer." >&2
+  log_error "CHECK_INTERVAL_SECONDS must be a positive integer."
   exit 1
 fi
 
@@ -34,14 +42,14 @@ stop() {
 }
 trap stop TERM INT
 
-echo "Monitoring started; interval: ${CHECK_INTERVAL_SECONDS}s."
+log "Monitoring started; interval: ${CHECK_INTERVAL_SECONDS}s."
 while true; do
   node ./src/monitor.js &
   child_pid=$!
   if wait "$child_pid"; then
     :
   else
-    echo "Check failed; retrying in ${CHECK_INTERVAL_SECONDS}s." >&2
+    log_error "Check failed; retrying in ${CHECK_INTERVAL_SECONDS}s."
   fi
   sleep "$CHECK_INTERVAL_SECONDS" &
   child_pid=$!

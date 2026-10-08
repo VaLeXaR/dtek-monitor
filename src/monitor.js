@@ -3,7 +3,9 @@ import { pathToFileURL } from "node:url"
 import { chromium } from "playwright"
 
 import {
+  EMERGENCY_OUTAGES_MESSAGE_FILE,
   HOUSE,
+  LAST_MESSAGE_FILE,
   SHUTDOWNS_PAGE,
   STREET,
   TELEGRAM_BOT_TOKEN,
@@ -18,12 +20,14 @@ import {
   getCurrentTime,
   loadEmergencyOutagesState,
   loadLastMessage,
+  migrateEmergencyOutagesMessageState,
   saveEmergencyOutagesState,
   saveLastMessage,
 } from "./helpers.js"
+import { log, logError } from "./logger.js"
 
 export async function getEmergencyOutagesNotice(browserPage) {
-  console.log("🌀 Checking emergency outages notice...")
+  log("🌀 Checking emergency outages notice...")
 
   const notice = browserPage.locator(
     ".m-attention__text > p:first-child",
@@ -31,16 +35,16 @@ export async function getEmergencyOutagesNotice(browserPage) {
 
   try {
     await notice.waitFor({ state: "visible", timeout: 3000 })
-    console.log("🚨 Emergency outages notice detected!")
+    log("🚨 Emergency outages notice detected!")
     return (await notice.innerText()).trim()
   } catch {
-    console.log("🟢 Emergency outages notice is not found.")
+    log("🟢 Emergency outages notice is not found.")
     return null
   }
 }
 
 export async function getInfo({ browserType = chromium } = {}) {
-  console.log("🌀 Getting info...")
+  log("🌀 Getting info...")
 
   const browser = await browserType.launch({ headless: true })
 
@@ -53,11 +57,6 @@ export async function getInfo({ browserType = chromium } = {}) {
 
     const emergencyOutagesNotice =
       await getEmergencyOutagesNotice(browserPage)
-
-    if (emergencyOutagesNotice) {
-      console.log("✅ Getting info finished.")
-      return { emergencyOutagesNotice }
-    }
 
     const csrfTokenTag = await browserPage.waitForSelector(
       'meta[name="csrf-token"]',
@@ -92,8 +91,8 @@ export async function getInfo({ browserType = chromium } = {}) {
       { STREET, csrfToken },
     )
 
-    console.log("✅ Getting info finished.")
-    return info
+    log("✅ Getting info finished.")
+    return { ...info, emergencyOutagesNotice }
   } catch (error) {
     throw Error(`❌ Getting info failed: ${error.message}`)
   } finally {
@@ -119,7 +118,7 @@ function getAddressInfo(info, house) {
 }
 
 export function checkIsOutage(info, house = HOUSE) {
-  console.log("🌀 Checking power outage...")
+  log("🌀 Checking power outage...")
 
   const {
     sub_type = "",
@@ -132,14 +131,14 @@ export function checkIsOutage(info, house = HOUSE) {
   )
 
   isOutageDetected
-    ? console.log("🚨 Power outage detected!")
-    : console.log("⚡️ No power outage!")
+    ? log("🚨 Power outage detected!")
+    : log("⚡️ No power outage!")
 
   return isOutageDetected
 }
 
 export function checkIsScheduled(info, house = HOUSE) {
-  console.log("🌀 Checking whether power outage scheduled...")
+  log("🌀 Checking whether power outage scheduled...")
 
   const { sub_type = "" } = getAddressInfo(info, house)
   const normalizedSubtype = String(sub_type).toLowerCase()
@@ -148,8 +147,8 @@ export function checkIsScheduled(info, house = HOUSE) {
     !normalizedSubtype.includes("аварій")
 
   isScheduled
-    ? console.log("🗓️ Power outage scheduled!")
-    : console.log("⚠️ Power outage not scheduled!")
+    ? log("🗓️ Power outage scheduled!")
+    : log("⚠️ Power outage not scheduled!")
 
   return isScheduled
 }
@@ -158,7 +157,7 @@ export function generateMessage(
   info,
   { street = STREET, house = HOUSE } = {},
 ) {
-  console.log("🌀 Generating message...")
+  log("🌀 Generating message...")
 
   const { sub_type = "", start_date = "", end_date = "" } = getAddressInfo(
     info,
@@ -182,7 +181,7 @@ export function generateMessage(
 }
 
 export function generateEmergencyOutagesMessage(notice, now = new Date()) {
-  console.log("🌀 Generating emergency outages message...")
+  log("🌀 Generating emergency outages message...")
 
   return [
     escapeHtml(notice),
@@ -194,14 +193,15 @@ export function generateEmergencyOutagesMessage(notice, now = new Date()) {
 export async function deleteLastNotification({
   clearLastMessageFn = clearLastMessage,
   fetchFn = globalThis.fetch,
+  lastMessageFile = LAST_MESSAGE_FILE,
   loadLastMessageFn = loadLastMessage,
   telegramBotToken = TELEGRAM_BOT_TOKEN,
   telegramChatId = TELEGRAM_CHAT_ID,
 } = {}) {
-  const lastMessage = loadLastMessageFn() || {}
+  const lastMessage = loadLastMessageFn(lastMessageFile) || {}
 
   if (!lastMessage.message_id) {
-    console.log("🟢 Notification is not found.")
+    log("🟢 Notification is not found.")
     return true
   }
 
@@ -209,7 +209,7 @@ export async function deleteLastNotification({
     throw Error("❌ Missing telegram bot token or chat id.")
   if (!telegramChatId) throw Error("❌ Missing telegram chat id.")
 
-  console.log("🗑️ Deleting notification...")
+  log("🗑️ Deleting notification...")
 
   try {
     const response = await fetchFn(
@@ -229,11 +229,11 @@ export async function deleteLastNotification({
       throw Error(data.description || "Telegram API request failed.")
     }
 
-    clearLastMessageFn()
-    console.log("🟢 Notification deleted.")
+    clearLastMessageFn(lastMessageFile)
+    log("🟢 Notification deleted.")
     return true
   } catch (error) {
-    console.log("🔴 Notification not deleted.", error.message)
+    log("🔴 Notification not deleted.", error.message)
     return false
   }
 }
@@ -243,6 +243,7 @@ export async function sendNotification(
   {
     deleteLastNotificationFn = deleteLastNotification,
     fetchFn = globalThis.fetch,
+    lastMessageFile = LAST_MESSAGE_FILE,
     loadLastMessageFn = loadLastMessage,
     saveLastMessageFn = saveLastMessage,
     telegramBotToken = TELEGRAM_BOT_TOKEN,
@@ -253,9 +254,9 @@ export async function sendNotification(
     throw Error("❌ Missing telegram bot token or chat id.")
   if (!telegramChatId) throw Error("❌ Missing telegram chat id.")
 
-  console.log("🌀 Sending notification...")
+  log("🌀 Sending notification...")
 
-  const lastMessage = loadLastMessageFn() || {}
+  const lastMessage = loadLastMessageFn(lastMessageFile) || {}
   try {
     const response = await fetchFn(
       `https://api.telegram.org/bot${telegramBotToken}/${
@@ -279,13 +280,13 @@ export async function sendNotification(
       throw Error(data.description || "Telegram API request failed.")
     }
 
-    saveLastMessageFn(data.result)
+    saveLastMessageFn(data.result, lastMessageFile)
 
-    console.log("🟢 Notification sent.")
+    log("🟢 Notification sent.")
     return true
   } catch (error) {
-    console.log("🔴 Notification not sent.", error.message)
-    await deleteLastNotificationFn()
+    log("🔴 Notification not sent.", error.message)
+    await deleteLastNotificationFn({ lastMessageFile })
     return false
   }
 }
@@ -313,33 +314,38 @@ export async function run({
     const message = generateEmergencyOutagesMessageFn(
       info.emergencyOutagesNotice,
     )
-    await sendNotificationFn(message)
-    return
+    await sendNotificationFn(message, {
+      lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+    })
   }
 
   if (emergencyOutagesAction === "delete") {
-    const notificationDeleted = await deleteLastNotificationFn()
+    const notificationDeleted = await deleteLastNotificationFn({
+      lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+    })
     if (notificationDeleted) {
       saveEmergencyOutagesStateFn(false)
     }
-    return
   }
 
   const isOutage = checkIsOutageFn(info)
   const isScheduled = checkIsScheduledFn(info)
   if (isOutage && !isScheduled) {
     const message = generateMessageFn(info)
-    await sendNotificationFn(message)
+    await sendNotificationFn(message, { lastMessageFile: LAST_MESSAGE_FILE })
   }
 
   if (!isOutage) {
-    await deleteLastNotificationFn()
+    await deleteLastNotificationFn({ lastMessageFile: LAST_MESSAGE_FILE })
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  migrateEmergencyOutagesMessageState({
+    emergencyMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+  })
   run().catch((error) => {
-    console.error(error.message)
+    logError(error.message)
     process.exitCode = 1
   })
 }
