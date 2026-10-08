@@ -31,6 +31,7 @@ export async function getEmergencyOutagesNotice(browserPage) {
 
   const notice = browserPage.locator(
     ".m-attention__text > p:first-child",
+    { hasText: /екстрен/i },
   )
 
   try {

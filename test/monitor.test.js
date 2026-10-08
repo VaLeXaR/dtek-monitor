@@ -142,15 +142,21 @@ test("reports an uncertain emergency notice check instead of treating it as abse
   )
 })
 
-test("gets address data even when a general emergency notice is visible", async () => {
+test("ignores a general modal without an emergency outages notice", async () => {
   const expectedInfo = createInfo("Аварійне")
   const browserPage = {
     evaluate: async () => expectedInfo,
     goto: async () => {},
-    locator: () => ({
-      innerText: async () => "General emergency notice",
-      waitFor: async () => {},
-    }),
+    locator: (selector, { hasText }) => {
+      assert.equal(selector, ".m-attention__text > p:first-child")
+      assert.equal(hasText.test("Інформація для споживачів"), false)
+      assert.equal(hasText.test("Застосовано екстрені відключення"), true)
+
+      return {
+        count: async () => 0,
+        waitFor: async () => Promise.reject(Error("missing")),
+      }
+    },
     waitForSelector: async () => ({
       getAttribute: async () => "csrf-token",
     }),
@@ -164,7 +170,7 @@ test("gets address data even when a general emergency notice is visible", async 
 
   assert.deepEqual(await getInfo({ browserType }), {
     ...expectedInfo,
-    emergencyOutagesNotice: "General emergency notice",
+    emergencyOutagesNotice: null,
   })
 })
 
