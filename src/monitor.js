@@ -172,7 +172,7 @@ export function generateMessage(
     `⚡️ <b>За адресою ${address} зафіксовано відключення</b>`,
     "",
     `🪫 Час початку - ${escapeHtml(start_date)}`,
-    `🔌 Орієнтовний час відновлення - ${escapeHtml(end_date)}`,
+    `🔌 Орієнтовний час відновлення - <b>${escapeHtml(end_date)}</b>`,
     "",
     `⚠️ <i>${reason}.</i>`,
     "\n",
