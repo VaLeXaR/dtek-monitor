@@ -6,29 +6,41 @@ import {
   LAST_MESSAGE_FILE,
 } from "./constants.js"
 
+function readJsonFile(file, fallback) {
+  if (!fs.existsSync(file)) return fallback
+
+  try {
+    const contents = fs.readFileSync(file, "utf8").trim()
+    return contents ? JSON.parse(contents) : fallback
+  } catch (error) {
+    console.warn(`⚠️ State file is invalid: ${error.message}`)
+    return fallback
+  }
+}
+
 export function capitalize(str) {
   if (typeof str !== "string") return ""
   return str[0].toUpperCase() + str.slice(1).toLowerCase()
 }
 
-export function loadLastMessage() {
-  if (!fs.existsSync(LAST_MESSAGE_FILE)) return null
-
-  const lastMessage = JSON.parse(
-    fs.readFileSync(LAST_MESSAGE_FILE, "utf8").trim()
-  )
+export function loadLastMessage(
+  file = LAST_MESSAGE_FILE,
+  now = new Date(),
+) {
+  const lastMessage = readJsonFile(file, null)
+  if (!lastMessage) return null
 
   if (lastMessage?.date) {
     const messageDay = new Date(lastMessage.date * 1000).toLocaleDateString(
       "en-CA",
-      { timeZone: "Europe/Kyiv" }
+      { timeZone: "Europe/Kyiv" },
     )
-    const today = new Date().toLocaleDateString("en-CA", {
+    const today = now.toLocaleDateString("en-CA", {
       timeZone: "Europe/Kyiv",
     })
 
     if (messageDay < today) {
-      clearLastMessage()
+      clearLastMessage(file)
       return null
     }
   }
@@ -36,45 +48,59 @@ export function loadLastMessage() {
   return lastMessage
 }
 
-export function saveLastMessage({ date, message_id } = {}) {
-  fs.mkdirSync(path.dirname(LAST_MESSAGE_FILE), { recursive: true })
+export function saveLastMessage(
+  { date, message_id } = {},
+  file = LAST_MESSAGE_FILE,
+) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(
-    LAST_MESSAGE_FILE,
+    file,
     JSON.stringify({
       message_id,
       date,
-    })
+    }),
   )
 }
 
-export function clearLastMessage() {
-  fs.mkdirSync(path.dirname(LAST_MESSAGE_FILE), { recursive: true })
-  fs.writeFileSync(LAST_MESSAGE_FILE, JSON.stringify({}))
+export function clearLastMessage(file = LAST_MESSAGE_FILE) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({}))
 }
 
-export function loadEmergencyOutagesState() {
-  if (!fs.existsSync(EMERGENCY_OUTAGES_STATE_FILE)) return false
-
-  const state = JSON.parse(
-    fs.readFileSync(EMERGENCY_OUTAGES_STATE_FILE, "utf8").trim()
-  )
+export function loadEmergencyOutagesState(
+  file = EMERGENCY_OUTAGES_STATE_FILE,
+) {
+  const state = readJsonFile(file, null)
 
   return state?.active === true
 }
 
-export function saveEmergencyOutagesState(active) {
-  fs.mkdirSync(path.dirname(EMERGENCY_OUTAGES_STATE_FILE), {
+export function saveEmergencyOutagesState(
+  active,
+  file = EMERGENCY_OUTAGES_STATE_FILE,
+) {
+  fs.mkdirSync(path.dirname(file), {
     recursive: true,
   })
-  fs.writeFileSync(
-    EMERGENCY_OUTAGES_STATE_FILE,
-    JSON.stringify({ active })
-  )
+  fs.writeFileSync(file, JSON.stringify({ active }))
 }
 
-export function getCurrentTime() {
-  const now = new Date()
+export function getEmergencyOutagesAction(notice, wereActive) {
+  if (notice) return "send"
+  if (wereActive) return "delete"
+  return null
+}
 
+export function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+}
+
+export function getCurrentTime(now = new Date()) {
   const date = now.toLocaleDateString("uk-UA", {
     timeZone: "Europe/Kyiv",
   })

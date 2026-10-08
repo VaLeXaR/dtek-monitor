@@ -25,8 +25,8 @@ repositories are community collections.
 | [github-actions-templates](https://skills.sh/wshobson/agents/github-actions-templates) | [wshobson/agents](https://github.com/wshobson/agents) | ~16.6K | ~40.3K | Update `monitor.yml`: dependency installation, caching, secrets, and permissions |
 | [javascript-testing-patterns](https://skills.sh/wshobson/agents/javascript-testing-patterns) | [wshobson/agents](https://github.com/wshobson/agents) | ~19.8K | ~40.3K | Add tests when needed: mock HTTP responses and verify notifications, errors, and state transitions |
 
-The first three skills match existing project tools. The fourth is useful when
-changing logic: the project currently has no automated test command.
+The first three skills match existing project tools. The fourth supports the
+built-in `node:test` suite used for isolated logic checks.
 
 ## Installed project skills
 

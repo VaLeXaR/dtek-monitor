@@ -1,3 +1,5 @@
+import { pathToFileURL } from "node:url"
+
 import { chromium } from "playwright"
 
 import {
@@ -11,6 +13,8 @@ import {
 import {
   capitalize,
   clearLastMessage,
+  escapeHtml,
+  getEmergencyOutagesAction,
   getCurrentTime,
   loadEmergencyOutagesState,
   loadLastMessage,
@@ -18,11 +22,11 @@ import {
   saveLastMessage,
 } from "./helpers.js"
 
-async function getEmergencyOutagesNotice(browserPage) {
+export async function getEmergencyOutagesNotice(browserPage) {
   console.log("🌀 Checking emergency outages notice...")
 
   const notice = browserPage.locator(
-    ".m-attention__text > p:first-child"
+    ".m-attention__text > p:first-child",
   )
 
   try {
@@ -35,13 +39,14 @@ async function getEmergencyOutagesNotice(browserPage) {
   }
 }
 
-async function getInfo() {
+export async function getInfo({ browserType = chromium } = {}) {
   console.log("🌀 Getting info...")
 
-  const browser = await chromium.launch({ headless: true })
-  const browserPage = await browser.newPage()
+  const browser = await browserType.launch({ headless: true })
 
   try {
+    const browserPage = await browser.newPage()
+
     await browserPage.goto(SHUTDOWNS_PAGE, {
       waitUntil: "load",
     })
@@ -56,7 +61,7 @@ async function getInfo() {
 
     const csrfTokenTag = await browserPage.waitForSelector(
       'meta[name="csrf-token"]',
-      { state: "attached" }
+      { state: "attached" },
     )
     const csrfToken = await csrfTokenTag.getAttribute("content")
 
@@ -77,9 +82,14 @@ async function getInfo() {
           },
           body: formData,
         })
+
+        if (!response.ok) {
+          throw Error(`DTEK request failed with status ${response.status}.`)
+        }
+
         return await response.json()
       },
-      { STREET, csrfToken }
+      { STREET, csrfToken },
     )
 
     console.log("✅ Getting info finished.")
@@ -91,16 +101,35 @@ async function getInfo() {
   }
 }
 
-function checkIsOutage(info) {
-  console.log("🌀 Checking power outage...")
-
+function getAddressInfo(info, house) {
   if (!info?.data) {
     throw Error("❌ Power outage info missed.")
   }
 
-  const { sub_type, start_date, end_date, type } = info?.data?.[HOUSE] || {}
-  const isOutageDetected =
-    sub_type !== "" || start_date !== "" || end_date !== "" || type !== ""
+  const addressInfo = info.data[house]
+  if (
+    !Object.hasOwn(info.data, house) ||
+    !addressInfo ||
+    typeof addressInfo !== "object"
+  ) {
+    throw Error("❌ Power outage info for the configured house is missing.")
+  }
+
+  return addressInfo
+}
+
+export function checkIsOutage(info, house = HOUSE) {
+  console.log("🌀 Checking power outage...")
+
+  const {
+    sub_type = "",
+    start_date = "",
+    end_date = "",
+    type = "",
+  } = getAddressInfo(info, house)
+  const isOutageDetected = [sub_type, start_date, end_date, type].some(
+    (value) => String(value ?? "").trim() !== "",
+  )
 
   isOutageDetected
     ? console.log("🚨 Power outage detected!")
@@ -109,15 +138,14 @@ function checkIsOutage(info) {
   return isOutageDetected
 }
 
-function checkIsScheduled(info) {
+export function checkIsScheduled(info, house = HOUSE) {
   console.log("🌀 Checking whether power outage scheduled...")
 
-  if (!info?.data) {
-    throw Error("❌ Power outage info missed.")
-  }
-
-  const { sub_type } = info?.data?.[HOUSE] || {}
-  const isScheduled = !sub_type.toLowerCase().includes("екстрен") && !sub_type.toLowerCase().includes("аварій")
+  const { sub_type = "" } = getAddressInfo(info, house)
+  const normalizedSubtype = String(sub_type).toLowerCase()
+  const isScheduled =
+    !normalizedSubtype.includes("екстрен") &&
+    !normalizedSubtype.includes("аварій")
 
   isScheduled
     ? console.log("🗓️ Power outage scheduled!")
@@ -126,100 +154,74 @@ function checkIsScheduled(info) {
   return isScheduled
 }
 
-function generateMessage(info) {
+export function generateMessage(
+  info,
+  { street = STREET, house = HOUSE } = {},
+) {
   console.log("🌀 Generating message...")
 
-  const { sub_type, start_date, end_date } = info?.data?.[HOUSE] || {}
+  const { sub_type = "", start_date = "", end_date = "" } = getAddressInfo(
+    info,
+    house,
+  )
   const { updateTimestamp } = info || {}
 
-  const reason = capitalize(sub_type)
-  //const begin = start_date.split(" ")[0]
-  //const end = end_date.split(" ")[0]
+  const address = `${escapeHtml(street)}, ${escapeHtml(house)}`
+  const reason = escapeHtml(capitalize(sub_type))
 
   return [
-    `⚡️ <b>За адресою ${STREET}, ${HOUSE} зафіксовано відключення</b>`,
+    `⚡️ <b>За адресою ${address} зафіксовано відключення</b>`,
     "",
-    `🪫 Час початку - ${start_date}`,
-    `🔌 Орієнтовний час відновлення - ${end_date}`,
+    `🪫 Час початку - ${escapeHtml(start_date)}`,
+    `🔌 Орієнтовний час відновлення - ${escapeHtml(end_date)}`,
     "",
     `⚠️ <i>${reason}.</i>`,
     "\n",
-    `🔄 <i>Дата оновлення інформації – ${updateTimestamp}</i>`
+    `🔄 <i>Дата оновлення інформації – ${escapeHtml(updateTimestamp)}</i>`,
   ].join("\n")
 }
 
-function generateEmergencyOutagesMessage(notice) {
+export function generateEmergencyOutagesMessage(notice, now = new Date()) {
   console.log("🌀 Generating emergency outages message...")
 
   return [
-    notice,
+    escapeHtml(notice),
     "",
-    `🔄 <i>Дата оновлення інформації – ${getCurrentTime()}</i>`,
+    `🔄 <i>Дата оновлення інформації – ${getCurrentTime(now)}</i>`,
   ].join("\n")
 }
 
-async function deleteLastNotification() {
-  const lastMessage = loadLastMessage() || {}
+export async function deleteLastNotification({
+  clearLastMessageFn = clearLastMessage,
+  fetchFn = globalThis.fetch,
+  loadLastMessageFn = loadLastMessage,
+  telegramBotToken = TELEGRAM_BOT_TOKEN,
+  telegramChatId = TELEGRAM_CHAT_ID,
+} = {}) {
+  const lastMessage = loadLastMessageFn() || {}
 
   if (!lastMessage.message_id) {
     console.log("🟢 Notification is not found.")
-    return
+    return true
   }
 
-  if (!TELEGRAM_BOT_TOKEN)
+  if (!telegramBotToken)
     throw Error("❌ Missing telegram bot token or chat id.")
-  if (!TELEGRAM_CHAT_ID) throw Error("❌ Missing telegram chat id.")
+  if (!telegramChatId) throw Error("❌ Missing telegram chat id.")
 
   console.log("🗑️ Deleting notification...")
 
   try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
+    const response = await fetchFn(
+      `https://api.telegram.org/bot${telegramBotToken}/deleteMessage`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chat_id: TELEGRAM_CHAT_ID,
+          chat_id: telegramChatId,
           message_id: lastMessage.message_id,
         }),
-      }
-    )
-
-    const data = await response.json()
-    if (data) {
-      clearLastMessage()
-    }
-
-    console.log("🟢 Notification deleted.")
-  } catch (error) {
-    console.log("🔴 Notification not deleted.", error.message)
-  }
-}
-
-async function sendNotification(message) {
-  if (!TELEGRAM_BOT_TOKEN)
-    throw Error("❌ Missing telegram bot token or chat id.")
-  if (!TELEGRAM_CHAT_ID) throw Error("❌ Missing telegram chat id.")
-
-  console.log("🌀 Sending notification...")
-
-  const lastMessage = loadLastMessage() || {}
-  try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${
-        lastMessage.message_id ? "editMessageText" : "sendMessage"
-      }`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: TELEGRAM_CHAT_ID,
-          text: message,
-          parse_mode: "HTML",
-          message_id: lastMessage.message_id ?? undefined,
-          disable_notification: true,
-        }),
-      }
+      },
     )
 
     const data = await response.json()
@@ -227,53 +229,117 @@ async function sendNotification(message) {
       throw Error(data.description || "Telegram API request failed.")
     }
 
-    saveLastMessage(data.result)
+    clearLastMessageFn()
+    console.log("🟢 Notification deleted.")
+    return true
+  } catch (error) {
+    console.log("🔴 Notification not deleted.", error.message)
+    return false
+  }
+}
+
+export async function sendNotification(
+  message,
+  {
+    deleteLastNotificationFn = deleteLastNotification,
+    fetchFn = globalThis.fetch,
+    loadLastMessageFn = loadLastMessage,
+    saveLastMessageFn = saveLastMessage,
+    telegramBotToken = TELEGRAM_BOT_TOKEN,
+    telegramChatId = TELEGRAM_CHAT_ID,
+  } = {},
+) {
+  if (!telegramBotToken)
+    throw Error("❌ Missing telegram bot token or chat id.")
+  if (!telegramChatId) throw Error("❌ Missing telegram chat id.")
+
+  console.log("🌀 Sending notification...")
+
+  const lastMessage = loadLastMessageFn() || {}
+  try {
+    const response = await fetchFn(
+      `https://api.telegram.org/bot${telegramBotToken}/${
+        lastMessage.message_id ? "editMessageText" : "sendMessage"
+      }`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: telegramChatId,
+          text: message,
+          parse_mode: "HTML",
+          message_id: lastMessage.message_id ?? undefined,
+          disable_notification: true,
+        }),
+      },
+    )
+
+    const data = await response.json()
+    if (!response.ok || !data.ok) {
+      throw Error(data.description || "Telegram API request failed.")
+    }
+
+    saveLastMessageFn(data.result)
 
     console.log("🟢 Notification sent.")
     return true
   } catch (error) {
     console.log("🔴 Notification not sent.", error.message)
-    await deleteLastNotification()
+    await deleteLastNotificationFn()
     return false
   }
 }
 
-async function run() {
-  const info = await getInfo()
-  const emergencyOutagesWereActive = loadEmergencyOutagesState()
+export async function run({
+  checkIsOutageFn = checkIsOutage,
+  checkIsScheduledFn = checkIsScheduled,
+  deleteLastNotificationFn = deleteLastNotification,
+  generateEmergencyOutagesMessageFn = generateEmergencyOutagesMessage,
+  generateMessageFn = generateMessage,
+  getInfoFn = getInfo,
+  loadEmergencyOutagesStateFn = loadEmergencyOutagesState,
+  saveEmergencyOutagesStateFn = saveEmergencyOutagesState,
+  sendNotificationFn = sendNotification,
+} = {}) {
+  const info = await getInfoFn()
+  const emergencyOutagesWereActive = loadEmergencyOutagesStateFn()
+  const emergencyOutagesAction = getEmergencyOutagesAction(
+    info.emergencyOutagesNotice,
+    emergencyOutagesWereActive,
+  )
 
-  if (info.emergencyOutagesNotice) {
-    saveEmergencyOutagesState(true)
-    const message = generateEmergencyOutagesMessage(
-      info.emergencyOutagesNotice
+  if (emergencyOutagesAction === "send") {
+    saveEmergencyOutagesStateFn(true)
+    const message = generateEmergencyOutagesMessageFn(
+      info.emergencyOutagesNotice,
     )
-    await sendNotification(message)
+    await sendNotificationFn(message)
     return
   }
 
-  if (emergencyOutagesWereActive) {
-    const notificationSent = await sendNotification(
-      "Повертаємось до графіків, екстрені відключення скасовано."
-    )
-    if (notificationSent) {
-      saveEmergencyOutagesState(false)
+  if (emergencyOutagesAction === "delete") {
+    const notificationDeleted = await deleteLastNotificationFn()
+    if (notificationDeleted) {
+      saveEmergencyOutagesStateFn(false)
     }
     return
   }
 
-  const isOutage = checkIsOutage(info)
-  const isScheduled = checkIsScheduled(info)
+  const isOutage = checkIsOutageFn(info)
+  const isScheduled = checkIsScheduledFn(info)
   if (isOutage && !isScheduled) {
-    const message = generateMessage(info)
-    await sendNotification(message)
+    const message = generateMessageFn(info)
+    await sendNotificationFn(message)
   }
 
   if (!isOutage) {
-    await deleteLastNotification()
+    await deleteLastNotificationFn()
   }
 }
 
-run().catch((error) => {
-  console.error(error.message)
-  process.exitCode = 1
-})
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run().catch((error) => {
+    console.error(error.message)
+    process.exitCode = 1
+  })
+}

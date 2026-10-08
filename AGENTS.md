@@ -27,6 +27,7 @@ Node.js version. The project has no compilation step.
 | `src/monitor.js` | Browser automation, DTEK requests, outage detection, Telegram API, and a single monitoring run |
 | `src/helpers.js` | JSON state persistence and date/text formatting |
 | `src/constants.js` | Environment variables, the DTEK URL, and state file paths |
+| `test/*.test.js` | Isolated `node:test` coverage for monitor behavior and state helpers |
 | `artifacts/last-message.json` | Last Telegram message state: `message_id` and `date` |
 | `artifacts/emergency-outages.json` | General emergency outage notice state: `active`; created at runtime |
 | `docker-entrypoint.sh` | Monitoring loop, interval, signal handling, and execution of supplied commands |
@@ -56,8 +57,8 @@ Node.js version. The project has no compilation step.
 - Monitoring supports Kyiv. Preserve the browser context for `/ua/ajax`
   requests, CSRF token retrieval, and browser cleanup in `finally`.
 - The general emergency outage notice takes priority over address-specific
-  requests. When it disappears, send the notification about returning to
-  scheduled outages; reset `active` only after successful delivery.
+  requests. When it disappears, delete its Telegram notification without
+  sending a cancellation message; reset `active` only after successful deletion.
 - Address-specific notifications cover emergency and unscheduled outage
   categories. Scheduled outages must not trigger notifications.
 - Edit an existing message from the current day. Clear previous-day state
@@ -92,11 +93,11 @@ For Dockerfile changes, validate the build with `docker compose build` when
 Docker daemon and network access are available. Starting the container is a
 separate action.
 
-`package.json` currently provides only `start` and `watch`; there are no
-`test`, `lint`, or `build` commands. Report only checks that actually ran;
-syntax checks do not validate logic. For logic changes, add focused checks,
-preferably using `node:test`, with mocked browser, `fetch`, and time, plus a
-temporary state directory. Documentation-only changes do not need new tests.
+`package.json` provides `start`, `test`, and `watch`; there are no `lint` or
+`build` commands. Report only checks that actually ran; syntax checks do not
+validate logic. For logic changes, add focused checks using `node:test`, with
+mocked browser, `fetch`, and time, plus a temporary state directory.
+Documentation-only changes do not need new tests.
 
 Relevant scenarios: no outage; scheduled, unscheduled, or emergency outages;
 appearance and cancellation of the general notice; day rollover in Kyiv;

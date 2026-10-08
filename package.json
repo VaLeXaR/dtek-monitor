@@ -6,6 +6,7 @@
   "main": "src/monitor.js",
   "scripts": {
     "start": "node --env-file=.env ./src/monitor.js",
+    "test": "node --test",
     "watch": "node --env-file=.env --watch ./src/monitor.js"
   },
   "dependencies": {
