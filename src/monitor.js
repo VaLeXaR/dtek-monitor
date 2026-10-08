@@ -37,9 +37,21 @@ export async function getEmergencyOutagesNotice(browserPage) {
     await notice.waitFor({ state: "visible", timeout: 3000 })
     log("🚨 Emergency outages notice detected!")
     return (await notice.innerText()).trim()
-  } catch {
-    log("🟢 Emergency outages notice is not found.")
-    return null
+  } catch (error) {
+    try {
+      if ((await notice.count()) === 0) {
+        log("🟢 Emergency outages notice is not found.")
+        return null
+      }
+    } catch (countError) {
+      throw Error(
+        `❌ Emergency outages notice check failed: ${countError.message}`,
+      )
+    }
+
+    throw Error(
+      `❌ Emergency outages notice check failed: ${error.message}`,
+    )
   }
 }
 
@@ -241,7 +253,6 @@ export async function deleteLastNotification({
 export async function sendNotification(
   message,
   {
-    deleteLastNotificationFn = deleteLastNotification,
     fetchFn = globalThis.fetch,
     lastMessageFile = LAST_MESSAGE_FILE,
     loadLastMessageFn = loadLastMessage,
@@ -277,6 +288,14 @@ export async function sendNotification(
 
     const data = await response.json()
     if (!response.ok || !data.ok) {
+      if (
+        lastMessage.message_id &&
+        data.description?.toLowerCase().includes("message is not modified")
+      ) {
+        log("🟢 Notification is already up to date.")
+        return true
+      }
+
       throw Error(data.description || "Telegram API request failed.")
     }
 
@@ -286,7 +305,6 @@ export async function sendNotification(
     return true
   } catch (error) {
     log("🔴 Notification not sent.", error.message)
-    await deleteLastNotificationFn({ lastMessageFile })
     return false
   }
 }

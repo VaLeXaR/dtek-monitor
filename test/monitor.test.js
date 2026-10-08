@@ -7,6 +7,7 @@ import {
   deleteLastNotification,
   generateEmergencyOutagesMessage,
   generateMessage,
+  getEmergencyOutagesNotice,
   getInfo,
   run,
   sendNotification,
@@ -103,7 +104,10 @@ test("closes the browser and reports a failed DTEK response", async () => {
   const browserPage = {
     evaluate: async (callback, value) => callback(value),
     goto: async () => {},
-    locator: () => ({ waitFor: async () => Promise.reject(Error("missing")) }),
+    locator: () => ({
+      count: async () => 0,
+      waitFor: async () => Promise.reject(Error("missing")),
+    }),
     waitForSelector: async () => ({
       getAttribute: async () => "csrf-token",
     }),
@@ -122,6 +126,20 @@ test("closes the browser and reports a failed DTEK response", async () => {
     /DTEK request failed with status 503/,
   )
   assert.equal(browserClosed, true)
+})
+
+test("reports an uncertain emergency notice check instead of treating it as absent", async () => {
+  const browserPage = {
+    locator: () => ({
+      count: async () => 1,
+      waitFor: async () => Promise.reject(Error("page became unavailable")),
+    }),
+  }
+
+  await assert.rejects(
+    getEmergencyOutagesNotice(browserPage),
+    /Emergency outages notice check failed: page became unavailable/,
+  )
 })
 
 test("gets address data even when a general emergency notice is visible", async () => {
@@ -188,7 +206,7 @@ test("keeps Telegram state when deletion fails", async () => {
   assert.equal(cleared, false)
 })
 
-test("handles Telegram send errors without persisting a message", async () => {
+test("keeps the previous Telegram notification when an update fails", async () => {
   let deleted = false
   let saved = false
   const sent = await sendNotification("message", {
@@ -199,7 +217,7 @@ test("handles Telegram send errors without persisting a message", async () => {
       json: async () => ({ ok: false, description: "failed" }),
       ok: false,
     }),
-    loadLastMessageFn: () => ({}),
+    loadLastMessageFn: () => ({ message_id: 123 }),
     saveLastMessageFn: () => {
       saved = true
     },
@@ -208,7 +226,41 @@ test("handles Telegram send errors without persisting a message", async () => {
   })
 
   assert.equal(sent, false)
-  assert.equal(deleted, true)
+  assert.equal(deleted, false)
+  assert.equal(saved, false)
+})
+
+test("keeps an unchanged general emergency notification", async () => {
+  let deleted = false
+  let loadedFile
+  let saved = false
+  const sent = await sendNotification("same message", {
+    deleteLastNotificationFn: async () => {
+      deleted = true
+    },
+    fetchFn: async () => ({
+      json: async () => ({
+        ok: false,
+        description:
+          "Bad Request: message is not modified: specified new message content and reply markup are exactly the same",
+      }),
+      ok: false,
+    }),
+    lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+    loadLastMessageFn: (lastMessageFile) => {
+      loadedFile = lastMessageFile
+      return { message_id: 123 }
+    },
+    saveLastMessageFn: () => {
+      saved = true
+    },
+    telegramBotToken: "token",
+    telegramChatId: "chat",
+  })
+
+  assert.equal(sent, true)
+  assert.equal(deleted, false)
+  assert.equal(loadedFile, EMERGENCY_OUTAGES_MESSAGE_FILE)
   assert.equal(saved, false)
 })
 
