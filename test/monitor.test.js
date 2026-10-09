@@ -95,6 +95,50 @@ test("escapes a general emergency outages notice", () => {
   assert.match(message, /12:05 08\.10\.2026/)
 })
 
+test("converts strong emphasis in an emergency notice to Telegram bold", () => {
+  const message = generateEmergencyOutagesMessage(
+    "Right bank: <strong>emergency & unsafe</strong>; <em>left bank</em>",
+    new Date("2026-10-08T09:05:00Z"),
+  )
+
+  assert.match(
+    message,
+    /^Right bank: <b>emergency &amp; unsafe<\/b>; &lt;em&gt;left bank&lt;\/em&gt;/,
+  )
+})
+
+test("extracts strong emphasis from a general emergency outages notice", async () => {
+  const textNode = (text) => ({ nodeType: 3, textContent: text })
+  const elementNode = (tagName, childNodes) => ({
+    childNodes,
+    nodeType: 1,
+    tagName,
+  })
+  const noticeElement = elementNode("P", [
+    textNode("  Right bank: "),
+    elementNode("STRONG", [textNode("emergency")]),
+    textNode("; left bank: "),
+    elementNode("STRONG", [textNode("scheduled")]),
+    textNode(".  "),
+  ])
+  const browserPage = {
+    locator: () => ({
+      evaluate: async (callback) => callback(noticeElement),
+      waitFor: async () => {},
+    }),
+  }
+
+  assert.deepEqual(await getEmergencyOutagesNotice(browserPage), {
+    segments: [
+      { bold: false, text: "Right bank: " },
+      { bold: true, text: "emergency" },
+      { bold: false, text: "; left bank: " },
+      { bold: true, text: "scheduled" },
+      { bold: false, text: "." },
+    ],
+  })
+})
+
 test("closes the browser and reports a failed DTEK response", async () => {
   let browserClosed = false
   mock.method(globalThis, "fetch", async () => ({

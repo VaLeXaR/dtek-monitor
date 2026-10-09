@@ -37,7 +37,47 @@ export async function getEmergencyOutagesNotice(browserPage) {
   try {
     await notice.waitFor({ state: "visible", timeout: 3000 })
     log("🚨 Emergency outages notice detected!")
-    return (await notice.innerText()).trim()
+    return await notice.evaluate((element) => {
+      const segments = []
+
+      const appendText = (text, bold) => {
+        if (!text) return
+
+        const previousSegment = segments.at(-1)
+        if (previousSegment?.bold === bold) {
+          previousSegment.text += text
+          return
+        }
+
+        segments.push({ text, bold })
+      }
+
+      const collectSegments = (node, bold = false) => {
+        if (node.nodeType === 3) {
+          appendText(node.textContent ?? "", bold)
+          return
+        }
+
+        if (node.nodeType !== 1) return
+        if (node.tagName === "BR") appendText("\n", bold)
+
+        const isBold = bold || node.tagName === "STRONG"
+        for (const childNode of node.childNodes) {
+          collectSegments(childNode, isBold)
+        }
+      }
+
+      collectSegments(element)
+
+      if (segments.length > 0) {
+        segments[0].text = segments[0].text.trimStart()
+        segments.at(-1).text = segments.at(-1).text.trimEnd()
+      }
+
+      return {
+        segments: segments.filter(({ text }) => text !== ""),
+      }
+    })
   } catch (error) {
     try {
       if ((await notice.count()) === 0) {
@@ -196,8 +236,24 @@ export function generateMessage(
 export function generateEmergencyOutagesMessage(notice, now = new Date()) {
   log("🌀 Generating emergency outages message...")
 
+  const formattedNotice = Array.isArray(notice?.segments)
+    ? notice.segments
+        .map(({ text, bold }) => {
+          const escapedText = escapeHtml(text)
+          return bold ? `<b>${escapedText}</b>` : escapedText
+        })
+        .join("")
+    : String(notice ?? "")
+        .split(/(<\/?strong(?:\s[^<>]*)?>)/gi)
+        .map((part) => {
+          if (/^<strong(?:\s[^<>]*)?>$/i.test(part)) return "<b>"
+          if (/^<\/strong>$/i.test(part)) return "</b>"
+          return escapeHtml(part)
+        })
+        .join("")
+
   return [
-    escapeHtml(notice),
+    formattedNotice,
     "",
     `🔄 <i>Дата оновлення інформації – ${getCurrentTime(now)}</i>`,
   ].join("\n")
