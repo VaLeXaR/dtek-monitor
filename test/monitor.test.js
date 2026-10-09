@@ -107,19 +107,27 @@ test("converts strong emphasis in an emergency notice to Telegram bold", () => {
   )
 })
 
-test("extracts strong emphasis from a general emergency outages notice", async () => {
+test("extracts all paragraphs from a general emergency outages notice", async () => {
   const textNode = (text) => ({ nodeType: 3, textContent: text })
   const elementNode = (tagName, childNodes) => ({
     childNodes,
     nodeType: 1,
     tagName,
   })
-  const noticeElement = elementNode("P", [
-    textNode("  Right bank: "),
-    elementNode("STRONG", [textNode("emergency")]),
-    textNode("; left bank: "),
-    elementNode("STRONG", [textNode("scheduled")]),
-    textNode(".  "),
+  const noticeElement = elementNode("DIV", [
+    textNode("\n    "),
+    elementNode("P", [
+      textNode("  Right bank: "),
+      elementNode("STRONG", [textNode("emergency")]),
+      textNode(".  "),
+    ]),
+    textNode("\n    "),
+    elementNode("P", [
+      textNode("Left bank: "),
+      elementNode("STRONG", [textNode("scheduled")]),
+      textNode(".  "),
+    ]),
+    textNode("\n  "),
   ])
   const browserPage = {
     locator: () => ({
@@ -132,7 +140,7 @@ test("extracts strong emphasis from a general emergency outages notice", async (
     segments: [
       { bold: false, text: "Right bank: " },
       { bold: true, text: "emergency" },
-      { bold: false, text: "; left bank: " },
+      { bold: false, text: ".\nLeft bank: " },
       { bold: true, text: "scheduled" },
       { bold: false, text: "." },
     ],
@@ -192,7 +200,7 @@ test("ignores a general modal without an emergency outages notice", async () => 
     evaluate: async () => expectedInfo,
     goto: async () => {},
     locator: (selector, { hasText }) => {
-      assert.equal(selector, ".m-attention__text > p:first-child")
+      assert.equal(selector, ".m-attention__text")
       assert.equal(hasText.test("Інформація для споживачів"), false)
       assert.equal(hasText.test("Застосовано екстрені відключення"), true)
 

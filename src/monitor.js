@@ -29,10 +29,9 @@ import { log, logError } from "./logger.js"
 export async function getEmergencyOutagesNotice(browserPage) {
   log("🌀 Checking emergency outages notice...")
 
-  const notice = browserPage.locator(
-    ".m-attention__text > p:first-child",
-    { hasText: /екстрен/i },
-  )
+  const notice = browserPage.locator(".m-attention__text", {
+    hasText: /екстрен/i,
+  })
 
   try {
     await notice.waitFor({ state: "visible", timeout: 3000 })
@@ -52,19 +51,42 @@ export async function getEmergencyOutagesNotice(browserPage) {
         segments.push({ text, bold })
       }
 
+      const appendLineBreak = () => {
+        let lastSegment = segments.at(-1)
+        if (!lastSegment) return
+
+        lastSegment.text = lastSegment.text.trimEnd()
+        if (!lastSegment.text) {
+          segments.pop()
+          lastSegment = segments.at(-1)
+        }
+
+        if (!lastSegment || lastSegment.text.endsWith("\n")) return
+        appendText("\n", false)
+      }
+
       const collectSegments = (node, bold = false) => {
         if (node.nodeType === 3) {
-          appendText(node.textContent ?? "", bold)
+          let text = (node.textContent ?? "").replace(/\s+/g, " ")
+          if (segments.at(-1)?.text.endsWith("\n")) {
+            text = text.trimStart()
+          }
+          appendText(text, bold)
           return
         }
 
         if (node.nodeType !== 1) return
-        if (node.tagName === "BR") appendText("\n", bold)
+        if (node.tagName === "BR") {
+          appendLineBreak()
+          return
+        }
 
         const isBold = bold || node.tagName === "STRONG"
         for (const childNode of node.childNodes) {
           collectSegments(childNode, isBold)
         }
+
+        if (node.tagName === "P") appendLineBreak()
       }
 
       collectSegments(element)
