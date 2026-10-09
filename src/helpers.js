@@ -24,27 +24,9 @@ export function capitalize(str) {
   return str[0].toUpperCase() + str.slice(1).toLowerCase()
 }
 
-export function loadLastMessage(
-  file = LAST_MESSAGE_FILE,
-  now = new Date(),
-) {
+export function loadLastMessage(file = LAST_MESSAGE_FILE) {
   const lastMessage = readJsonFile(file, null)
   if (!lastMessage) return null
-
-  if (lastMessage?.date) {
-    const messageDay = new Date(lastMessage.date * 1000).toLocaleDateString(
-      "en-CA",
-      { timeZone: "Europe/Kyiv" },
-    )
-    const today = now.toLocaleDateString("en-CA", {
-      timeZone: "Europe/Kyiv",
-    })
-
-    if (messageDay < today) {
-      clearLastMessage(file)
-      return null
-    }
-  }
 
   return lastMessage
 }

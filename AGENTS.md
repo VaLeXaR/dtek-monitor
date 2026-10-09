@@ -61,9 +61,9 @@ Node.js version. The project has no compilation step.
   sending a cancellation message; reset `active` only after successful deletion.
 - Address-specific notifications cover emergency and unscheduled outage
   categories. Scheduled outages must not trigger notifications.
-- Edit an existing message from the current day. Clear previous-day state
-  according to the calendar date in `Europe/Kyiv`. Format user-facing dates
-  in the same time zone.
+- Continue editing the same existing message across calendar-date changes.
+  Clear its state only after the corresponding notification is successfully
+  deleted. Format user-facing dates in the `Europe/Kyiv` time zone.
 - Telegram uses `parse_mode: "HTML"`. When changing message generation,
   account for escaping external data and address values.
 - Preserve JSON state compatibility and first-run behavior without state

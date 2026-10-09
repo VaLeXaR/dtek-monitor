@@ -193,6 +193,33 @@ test("deletes a Telegram notification only after a successful response", async (
   assert.equal(cleared, true)
 })
 
+test("deletes a previous-day notification after an outage ends", async () => {
+  let cleared = false
+  let requestBody
+  const deleted = await deleteLastNotification({
+    clearLastMessageFn: () => {
+      cleared = true
+    },
+    fetchFn: async (_url, options) => {
+      requestBody = JSON.parse(options.body)
+      return {
+        json: async () => ({ ok: true }),
+        ok: true,
+      }
+    },
+    loadLastMessageFn: () => ({
+      date: Date.parse("2026-10-08T20:51:00Z") / 1000,
+      message_id: 123,
+    }),
+    telegramBotToken: "token",
+    telegramChatId: "chat",
+  })
+
+  assert.equal(deleted, true)
+  assert.equal(requestBody.message_id, 123)
+  assert.equal(cleared, true)
+})
+
 test("keeps Telegram state when deletion fails", async () => {
   let cleared = false
   const deleted = await deleteLastNotification({
@@ -235,6 +262,62 @@ test("keeps the previous Telegram notification when an update fails", async () =
   assert.equal(deleted, false)
   assert.equal(saved, false)
 })
+
+for (const [notificationType, lastMessageFile] of [
+  ["address outage", LAST_MESSAGE_FILE],
+  ["general emergency outage", EMERGENCY_OUTAGES_MESSAGE_FILE],
+]) {
+  test(`updates a previous-day ${notificationType} notification`, async () => {
+    let deleted = false
+    const requests = []
+    const savedMessages = []
+    const sent = await sendNotification("current update", {
+      deleteLastNotificationFn: async () => {
+        deleted = true
+        return true
+      },
+      fetchFn: async (url, options) => {
+        requests.push([url, JSON.parse(options.body)])
+        return {
+          json: async () => ({
+            ok: true,
+            result: {
+              date: Date.parse("2026-10-08T20:51:00Z") / 1000,
+              edit_date: Date.parse("2026-10-08T21:01:00Z") / 1000,
+              message_id: 123,
+            },
+          }),
+          ok: true,
+        }
+      },
+      lastMessageFile,
+      loadLastMessageFn: () => ({
+        date: Date.parse("2026-10-08T20:51:00Z") / 1000,
+        message_id: 123,
+      }),
+      saveLastMessageFn: (message, savedFile) => {
+        savedMessages.push([message, savedFile])
+      },
+      telegramBotToken: "token",
+      telegramChatId: "chat",
+    })
+
+    assert.equal(sent, true)
+    assert.equal(deleted, false)
+    assert.match(requests[0][0], /\/editMessageText$/)
+    assert.equal(requests[0][1].message_id, 123)
+    assert.deepEqual(savedMessages, [
+      [
+        {
+          date: Date.parse("2026-10-08T20:51:00Z") / 1000,
+          edit_date: Date.parse("2026-10-08T21:01:00Z") / 1000,
+          message_id: 123,
+        },
+        lastMessageFile,
+      ],
+    ])
+  })
+}
 
 test("keeps an unchanged general emergency notification", async () => {
   let deleted = false

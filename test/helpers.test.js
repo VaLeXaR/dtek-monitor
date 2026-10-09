@@ -112,17 +112,17 @@ test("migrates an active emergency notification to independent state", () => {
   )
 })
 
-test("clears previous-day message state using the Kyiv calendar date", () => {
+test("preserves message state across Kyiv calendar dates", () => {
   const lastMessageFile = path.join(temporaryDirectory, "last-message.json")
   const previousDay = Date.parse("2026-10-07T20:30:00Z") / 1000
-  const nextDayInKyiv = new Date("2026-10-07T21:30:00Z")
-  saveLastMessage(
-    { date: previousDay, message_id: 456 },
-    lastMessageFile,
-  )
+  const lastMessage = { date: previousDay, message_id: 456 }
+  saveLastMessage(lastMessage, lastMessageFile)
 
-  assert.equal(loadLastMessage(lastMessageFile, nextDayInKyiv), null)
-  assert.deepEqual(JSON.parse(fs.readFileSync(lastMessageFile, "utf8")), {})
+  assert.deepEqual(loadLastMessage(lastMessageFile), lastMessage)
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(lastMessageFile, "utf8")),
+    lastMessage,
+  )
 })
 
 test("formats the current time in the Kyiv time zone", () => {
