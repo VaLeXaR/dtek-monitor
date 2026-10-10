@@ -30,7 +30,7 @@ export async function getEmergencyOutagesNotice(browserPage) {
   log("🌀 Checking emergency outages notice...")
 
   const notice = browserPage.locator(".m-attention__text", {
-    hasText: /екстрені/i,
+    hasText: /не діють/i,
   })
 
   try {
