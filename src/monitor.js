@@ -348,24 +348,41 @@ export async function sendNotification(
 
   const lastMessage = loadLastMessageFn(lastMessageFile) || {}
   try {
-    const response = await fetchFn(
-      `https://api.telegram.org/bot${telegramBotToken}/${
-        lastMessage.message_id ? "editMessageText" : "sendMessage"
-      }`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          text: message,
-          parse_mode: "HTML",
-          message_id: lastMessage.message_id ?? undefined,
-          disable_notification: true,
-        }),
-      },
+    const requestNotification = async (method, messageId) => {
+      const response = await fetchFn(
+        `https://api.telegram.org/bot${telegramBotToken}/${method}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: telegramChatId,
+            text: message,
+            parse_mode: "HTML",
+            message_id: messageId,
+            disable_notification: true,
+          }),
+        },
+      )
+
+      return { data: await response.json(), response }
+    }
+
+    let { data, response } = await requestNotification(
+      lastMessage.message_id ? "editMessageText" : "sendMessage",
+      lastMessage.message_id,
     )
 
-    const data = await response.json()
+    if (
+      (!response.ok || !data.ok) &&
+      lastMessage.message_id &&
+      data.description?.toLowerCase().includes("message to edit not found")
+    ) {
+      log("⚠️ Previous notification is missing. Sending a new one...")
+      const newNotification = await requestNotification("sendMessage")
+      data = newNotification.data
+      response = newNotification.response
+    }
+
     if (!response.ok || !data.ok) {
       if (
         lastMessage.message_id &&

@@ -317,6 +317,52 @@ test("keeps the previous Telegram notification when an update fails", async () =
   assert.equal(saved, false)
 })
 
+test("sends a new Telegram notification when the saved message is missing", async () => {
+  const requests = []
+  const savedMessages = []
+  const responses = [
+    {
+      json: async () => ({
+        ok: false,
+        description: "Bad Request: message to edit not found",
+      }),
+      ok: false,
+    },
+    {
+      json: async () => ({
+        ok: true,
+        result: { date: 1_760_277_764, message_id: 456 },
+      }),
+      ok: true,
+    },
+  ]
+
+  const sent = await sendNotification("message", {
+    fetchFn: async (url, options) => {
+      requests.push([url, JSON.parse(options.body)])
+      return responses.shift()
+    },
+    loadLastMessageFn: () => ({ message_id: 123 }),
+    saveLastMessageFn: (message, savedFile) => {
+      savedMessages.push([message, savedFile])
+    },
+    telegramBotToken: "token",
+    telegramChatId: "chat",
+  })
+
+  assert.equal(sent, true)
+  assert.match(requests[0][0], /\/editMessageText$/)
+  assert.equal(requests[0][1].message_id, 123)
+  assert.match(requests[1][0], /\/sendMessage$/)
+  assert.equal(Object.hasOwn(requests[1][1], "message_id"), false)
+  assert.deepEqual(savedMessages, [
+    [
+      { date: 1_760_277_764, message_id: 456 },
+      LAST_MESSAGE_FILE,
+    ],
+  ])
+})
+
 for (const [notificationType, lastMessageFile] of [
   ["address outage", LAST_MESSAGE_FILE],
   ["general emergency outage", EMERGENCY_OUTAGES_MESSAGE_FILE],
