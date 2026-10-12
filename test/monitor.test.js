@@ -174,10 +174,49 @@ test("closes the browser and reports a failed DTEK response", async () => {
   }
 
   await assert.rejects(
-    getInfo({ browserType }),
+    getInfo({ browserType, retryMaxAttempts: 1 }),
     /DTEK request failed with status 503/,
   )
   assert.equal(browserClosed, true)
+})
+
+test("retries a transient browser launch failure", async () => {
+  let launches = 0
+  const delays = []
+  const expectedInfo = createInfo("Аварійне")
+  const browserPage = {
+    evaluate: async () => expectedInfo,
+    goto: async () => {},
+    locator: () => ({
+      count: async () => 0,
+      waitFor: async () => Promise.reject(Error("missing")),
+    }),
+    waitForSelector: async () => ({
+      getAttribute: async () => "csrf-token",
+    }),
+  }
+  const browserType = {
+    launch: async () => {
+      launches += 1
+      if (launches === 1) throw Error("browser unavailable")
+      return {
+        close: async () => {},
+        newPage: async () => browserPage,
+      }
+    },
+  }
+
+  assert.deepEqual(
+    await getInfo({
+      browserType,
+      retryDelayMs: 10,
+      retryMaxAttempts: 2,
+      sleepFn: async (delay) => delays.push(delay),
+    }),
+    { ...expectedInfo, emergencyOutagesNotice: null },
+  )
+  assert.equal(launches, 2)
+  assert.deepEqual(delays, [10])
 })
 
 test("reports an uncertain emergency notice check instead of treating it as absent", async () => {
@@ -361,6 +400,55 @@ test("sends a new Telegram notification when the saved message is missing", asyn
       LAST_MESSAGE_FILE,
     ],
   ])
+})
+
+test("retries a transient Telegram failure without clearing state", async () => {
+  const delays = []
+  const requestBodies = []
+  let requests = 0
+  let savedMessage
+
+  const sent = await sendNotification("message", {
+    fetchFn: async (_url, options) => {
+      requests += 1
+      requestBodies.push(JSON.parse(options.body))
+      if (requests === 1) {
+        return {
+          json: async () => ({ ok: false, description: "unavailable" }),
+          ok: false,
+          status: 503,
+        }
+      }
+
+      return {
+        json: async () => ({
+          ok: true,
+          result: { date: 1_760_277_764, message_id: 456 },
+        }),
+        ok: true,
+        status: 200,
+      }
+    },
+    loadLastMessageFn: () => ({ message_id: 123 }),
+    now: new Date("2026-10-08T09:00:00Z"),
+    retryDelayMs: 10,
+    retryMaxAttempts: 2,
+    saveLastMessageFn: (message) => {
+      savedMessage = message
+    },
+    sleepFn: async (delay) => delays.push(delay),
+    telegramBotToken: "token",
+    telegramChatId: "chat",
+  })
+
+  assert.equal(sent, true)
+  assert.equal(requests, 2)
+  assert.deepEqual(delays, [10])
+  assert.equal(requestBodies[0].disable_notification, false)
+  assert.deepEqual(savedMessage, {
+    date: 1_760_277_764,
+    message_id: 456,
+  })
 })
 
 for (const [notificationType, lastMessageFile] of [

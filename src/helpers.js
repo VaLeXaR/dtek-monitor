@@ -4,6 +4,10 @@ import path from "node:path"
 import {
   EMERGENCY_OUTAGES_STATE_FILE,
   LAST_MESSAGE_FILE,
+  QUIET_HOURS_END,
+  QUIET_HOURS_START,
+  RETRY_DELAY_MS,
+  RETRY_MAX_ATTEMPTS,
 } from "./constants.js"
 import { warn } from "./logger.js"
 
@@ -103,6 +107,52 @@ export function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;")
+}
+
+export function isQuietHours(
+  now = new Date(),
+  { end = QUIET_HOURS_END, start = QUIET_HOURS_START } = {},
+) {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      hourCycle: "h23",
+      timeZone: "Europe/Kyiv",
+    })
+      .formatToParts(now)
+      .find((part) => part.type === "hour")?.value,
+  )
+
+  if (start === end) return false
+  if (start < end) return hour >= start && hour < end
+  return hour >= start || hour < end
+}
+
+export async function retry(
+  operation,
+  {
+    delayMs = RETRY_DELAY_MS,
+    maxAttempts = RETRY_MAX_ATTEMPTS,
+    onRetry = () => {},
+    shouldRetry = () => true,
+    sleepFn = (timeout) =>
+      new Promise((resolve) => setTimeout(resolve, timeout)),
+  } = {},
+) {
+  let attempt = 1
+
+  while (true) {
+    try {
+      return await operation(attempt)
+    } catch (error) {
+      if (attempt >= maxAttempts || !shouldRetry(error)) throw error
+
+      const nextDelay = delayMs * 2 ** (attempt - 1)
+      await onRetry(error, { attempt, nextDelay })
+      await sleepFn(nextDelay)
+      attempt += 1
+    }
+  }
 }
 
 export function getCurrentTime(now = new Date()) {

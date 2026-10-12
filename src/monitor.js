@@ -6,6 +6,8 @@ import {
   EMERGENCY_OUTAGES_MESSAGE_FILE,
   HOUSE,
   LAST_MESSAGE_FILE,
+  RETRY_DELAY_MS,
+  RETRY_MAX_ATTEMPTS,
   SHUTDOWNS_PAGE,
   STREET,
   TELEGRAM_BOT_TOKEN,
@@ -18,9 +20,11 @@ import {
   escapeHtml,
   getEmergencyOutagesAction,
   getCurrentTime,
+  isQuietHours,
   loadEmergencyOutagesState,
   loadLastMessage,
   migrateEmergencyOutagesMessageState,
+  retry,
   saveEmergencyOutagesState,
   saveLastMessage,
 } from "./helpers.js"
@@ -118,61 +122,85 @@ export async function getEmergencyOutagesNotice(browserPage) {
   }
 }
 
-export async function getInfo({ browserType = chromium } = {}) {
-  log("🌀 Getting info...")
+export async function getInfo({
+  browserType = chromium,
+  retryDelayMs = RETRY_DELAY_MS,
+  retryFn = retry,
+  retryMaxAttempts = RETRY_MAX_ATTEMPTS,
+  sleepFn,
+} = {}) {
+  return retryFn(
+    async () => {
+      log("🌀 Getting info...")
 
-  const browser = await browserType.launch({ headless: true })
+      let browser
+      try {
+        browser = await browserType.launch({ headless: true })
+        const browserPage = await browser.newPage()
 
-  try {
-    const browserPage = await browser.newPage()
-
-    await browserPage.goto(SHUTDOWNS_PAGE, {
-      waitUntil: "load",
-    })
-
-    const emergencyOutagesNotice =
-      await getEmergencyOutagesNotice(browserPage)
-
-    const csrfTokenTag = await browserPage.waitForSelector(
-      'meta[name="csrf-token"]',
-      { state: "attached" },
-    )
-    const csrfToken = await csrfTokenTag.getAttribute("content")
-
-    const info = await browserPage.evaluate(
-      async ({ STREET, csrfToken }) => {
-        const formData = new URLSearchParams()
-        formData.append("method", "getHomeNum")
-        formData.append("data[0][name]", "street")
-        formData.append("data[0][value]", STREET)
-        formData.append("data[1][name]", "updateFact")
-        formData.append("data[1][value]", new Date().toLocaleString("uk-UA"))
-
-        const response = await fetch("/ua/ajax", {
-          method: "POST",
-          headers: {
-            "x-requested-with": "XMLHttpRequest",
-            "x-csrf-token": csrfToken,
-          },
-          body: formData,
+        await browserPage.goto(SHUTDOWNS_PAGE, {
+          waitUntil: "load",
         })
 
-        if (!response.ok) {
-          throw Error(`DTEK request failed with status ${response.status}.`)
-        }
+        const emergencyOutagesNotice =
+          await getEmergencyOutagesNotice(browserPage)
 
-        return await response.json()
+        const csrfTokenTag = await browserPage.waitForSelector(
+          'meta[name="csrf-token"]',
+          { state: "attached" },
+        )
+        const csrfToken = await csrfTokenTag.getAttribute("content")
+
+        const info = await browserPage.evaluate(
+          async ({ STREET, csrfToken }) => {
+            const formData = new URLSearchParams()
+            formData.append("method", "getHomeNum")
+            formData.append("data[0][name]", "street")
+            formData.append("data[0][value]", STREET)
+            formData.append("data[1][name]", "updateFact")
+            formData.append(
+              "data[1][value]",
+              new Date().toLocaleString("uk-UA"),
+            )
+
+            const response = await fetch("/ua/ajax", {
+              method: "POST",
+              headers: {
+                "x-requested-with": "XMLHttpRequest",
+                "x-csrf-token": csrfToken,
+              },
+              body: formData,
+            })
+
+            if (!response.ok) {
+              throw Error(`DTEK request failed with status ${response.status}.`)
+            }
+
+            return await response.json()
+          },
+          { STREET, csrfToken },
+        )
+
+        log("✅ Getting info finished.")
+        return { ...info, emergencyOutagesNotice }
+      } catch (error) {
+        throw Error(`❌ Getting info failed: ${error.message}`)
+      } finally {
+        await browser?.close()
+      }
+    },
+    {
+      delayMs: retryDelayMs,
+      maxAttempts: retryMaxAttempts,
+      onRetry: (error, { attempt, nextDelay }) => {
+        log(
+          `⚠️ DTEK attempt ${attempt} failed; retrying in ${nextDelay} ms.`,
+          error.message,
+        )
       },
-      { STREET, csrfToken },
-    )
-
-    log("✅ Getting info finished.")
-    return { ...info, emergencyOutagesNotice }
-  } catch (error) {
-    throw Error(`❌ Getting info failed: ${error.message}`)
-  } finally {
-    await browser.close()
-  }
+      sleepFn,
+    },
+  )
 }
 
 function getAddressInfo(info, house) {
@@ -281,11 +309,63 @@ export function generateEmergencyOutagesMessage(notice, now = new Date()) {
   ].join("\n")
 }
 
+async function requestTelegram(
+  method,
+  body,
+  {
+    fetchFn,
+    retryDelayMs,
+    retryFn,
+    retryMaxAttempts,
+    sleepFn,
+    telegramBotToken,
+  },
+) {
+  return retryFn(
+    async () => {
+      const response = await fetchFn(
+        `https://api.telegram.org/bot${telegramBotToken}/${method}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      )
+      const data = await response.json()
+      const status = Number(response.status)
+
+      if (
+        (!response.ok || !data.ok) &&
+        (status === 429 || (status >= 500 && status <= 599))
+      ) {
+        throw Error(data.description || `Telegram returned status ${status}.`)
+      }
+
+      return { data, response }
+    },
+    {
+      delayMs: retryDelayMs,
+      maxAttempts: retryMaxAttempts,
+      onRetry: (error, { attempt, nextDelay }) => {
+        log(
+          `⚠️ Telegram attempt ${attempt} failed; retrying in ${nextDelay} ms.`,
+          error.message,
+        )
+      },
+      sleepFn,
+    },
+  )
+}
+
 export async function deleteLastNotification({
   clearLastMessageFn = clearLastMessage,
   fetchFn = globalThis.fetch,
   lastMessageFile = LAST_MESSAGE_FILE,
   loadLastMessageFn = loadLastMessage,
+  retryDelayMs = RETRY_DELAY_MS,
+  retryFn = retry,
+  retryMaxAttempts = RETRY_MAX_ATTEMPTS,
+  sleepFn,
   telegramBotToken = TELEGRAM_BOT_TOKEN,
   telegramChatId = TELEGRAM_CHAT_ID,
 } = {}) {
@@ -303,19 +383,22 @@ export async function deleteLastNotification({
   log("🗑️ Deleting notification...")
 
   try {
-    const response = await fetchFn(
-      `https://api.telegram.org/bot${telegramBotToken}/deleteMessage`,
+    const { data, response } = await requestTelegram(
+      "deleteMessage",
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          message_id: lastMessage.message_id,
-        }),
+        chat_id: telegramChatId,
+        message_id: lastMessage.message_id,
+      },
+      {
+        fetchFn,
+        retryDelayMs,
+        retryFn,
+        retryMaxAttempts,
+        sleepFn,
+        telegramBotToken,
       },
     )
 
-    const data = await response.json()
     if (!response.ok || !data.ok) {
       throw Error(data.description || "Telegram API request failed.")
     }
@@ -333,9 +416,15 @@ export async function sendNotification(
   message,
   {
     fetchFn = globalThis.fetch,
+    isQuietHoursFn = isQuietHours,
     lastMessageFile = LAST_MESSAGE_FILE,
     loadLastMessageFn = loadLastMessage,
+    now = new Date(),
+    retryDelayMs = RETRY_DELAY_MS,
+    retryFn = retry,
+    retryMaxAttempts = RETRY_MAX_ATTEMPTS,
     saveLastMessageFn = saveLastMessage,
+    sleepFn,
     telegramBotToken = TELEGRAM_BOT_TOKEN,
     telegramChatId = TELEGRAM_CHAT_ID,
   } = {},
@@ -349,22 +438,24 @@ export async function sendNotification(
   const lastMessage = loadLastMessageFn(lastMessageFile) || {}
   try {
     const requestNotification = async (method, messageId) => {
-      const response = await fetchFn(
-        `https://api.telegram.org/bot${telegramBotToken}/${method}`,
+      return requestTelegram(
+        method,
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: telegramChatId,
-            text: message,
-            parse_mode: "HTML",
-            message_id: messageId,
-            disable_notification: true,
-          }),
+          chat_id: telegramChatId,
+          text: message,
+          parse_mode: "HTML",
+          message_id: messageId,
+          disable_notification: isQuietHoursFn(now),
+        },
+        {
+          fetchFn,
+          retryDelayMs,
+          retryFn,
+          retryMaxAttempts,
+          sleepFn,
+          telegramBotToken,
         },
       )
-
-      return { data: await response.json(), response }
     }
 
     let { data, response } = await requestNotification(

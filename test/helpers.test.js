@@ -8,9 +8,11 @@ import {
   escapeHtml,
   getCurrentTime,
   getEmergencyOutagesAction,
+  isQuietHours,
   loadEmergencyOutagesState,
   loadLastMessage,
   migrateEmergencyOutagesMessageState,
+  retry,
   saveEmergencyOutagesState,
   saveLastMessage,
 } from "../src/helpers.js"
@@ -130,4 +132,37 @@ test("formats the current time in the Kyiv time zone", () => {
     getCurrentTime(new Date("2026-10-08T09:05:00Z")),
     "12:05 08.10.2026",
   )
+})
+
+test("detects quiet hours across midnight in the Kyiv time zone", () => {
+  assert.equal(isQuietHours(new Date("2026-10-08T18:59:00Z")), false)
+  assert.equal(isQuietHours(new Date("2026-10-08T19:00:00Z")), true)
+  assert.equal(isQuietHours(new Date("2026-10-09T04:59:00Z")), true)
+  assert.equal(isQuietHours(new Date("2026-10-09T05:00:00Z")), false)
+  assert.equal(
+    isQuietHours(new Date("2026-10-08T20:00:00Z"), { start: 8, end: 8 }),
+    false,
+  )
+})
+
+test("retries failed operations with exponential delays", async () => {
+  const delays = []
+  let attempts = 0
+
+  const result = await retry(
+    async () => {
+      attempts += 1
+      if (attempts < 3) throw Error("temporary failure")
+      return "done"
+    },
+    {
+      delayMs: 10,
+      maxAttempts: 3,
+      sleepFn: async (delay) => delays.push(delay),
+    },
+  )
+
+  assert.equal(result, "done")
+  assert.equal(attempts, 3)
+  assert.deepEqual(delays, [10, 20])
 })

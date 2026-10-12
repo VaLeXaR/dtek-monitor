@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "bootstrap-sha": "4690cc1dca71270c7c58f4ee594e42de9bbbb1d3",
+  "changelog-sections": [
+    { "type": "feat", "section": "Можливості" },
+    { "type": "fix", "section": "Виправлення" },
+    { "type": "refactor", "section": "Рефакторинг" },
+    { "type": "docs", "section": "Документація" },
+    { "type": "ci", "section": "Безперервна інтеграція" }
+  ],
+  "packages": {
+    ".": {}
+  }
+}
