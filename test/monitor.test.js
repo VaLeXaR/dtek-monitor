@@ -204,6 +204,7 @@ test("ignores a general modal without an emergency outages notice", async () => 
       assert.equal(hasText.test("Інформація для споживачів"), false)
       assert.equal(hasText.test("Застосовано екстрені відключення"), true)
       assert.equal(hasText.test("Графіки відключень не діють"), true)
+      assert.equal(hasText.test("зафіксовано аварійне відключення"), true)
 
       return {
         count: async () => 0,
