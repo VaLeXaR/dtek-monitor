@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/monitor.js",
   "scripts": {
+    "prepare": "node --eval \"const { spawnSync } = require('node:child_process'); const git = spawnSync('git', ['rev-parse', '--git-dir'], { stdio: 'ignore' }); if (git.status === 0) { const result = spawnSync('git', ['config', 'core.hooksPath', '.githooks'], { stdio: 'inherit' }); process.exitCode = result.status ?? 1 }\"",
     "start": "node --env-file=.env ./src/monitor.js",
     "test": "node --test",
     "watch": "node --env-file=.env --watch ./src/monitor.js"
