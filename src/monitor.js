@@ -31,84 +31,108 @@ import {
 } from "./helpers.js"
 import { log, logError } from "./logger.js"
 
+const TELEGRAM_MESSAGE_TITLE =
+  "<b>Повідомлення з сайту ДТЕК Київські Електромережі</b>"
+
 export async function getEmergencyOutagesNotice(browserPage) {
   log("🌀 Checking emergency outages notice...")
 
-  const notice = browserPage.locator(".m-attention__text", {
-    hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
-  })
+  const notices = browserPage
+    .locator(".m-attention__text")
+    .filter({ visible: true })
 
   try {
-    await notice.waitFor({ state: "visible", timeout: 3000 })
-    log("🚨 Emergency outages notice detected!")
-    return await notice.evaluate((element) => {
-      const segments = []
+    await notices.first().waitFor({ state: "visible", timeout: 3000 })
+    log("🚨 DTEK notices detected!")
+    const notice = await notices.evaluateAll((elements) => {
+      const allSegments = []
 
-      const appendText = (text, bold) => {
-        if (!text) return
+      const collectElementSegments = (element) => {
+        const segments = []
 
-        const previousSegment = segments.at(-1)
-        if (previousSegment?.bold === bold) {
-          previousSegment.text += text
-          return
-        }
+        const appendText = (text, bold) => {
+          if (!text) return
 
-        segments.push({ text, bold })
-      }
-
-      const appendLineBreak = () => {
-        let lastSegment = segments.at(-1)
-        if (!lastSegment) return
-
-        lastSegment.text = lastSegment.text.trimEnd()
-        if (!lastSegment.text) {
-          segments.pop()
-          lastSegment = segments.at(-1)
-        }
-
-        if (!lastSegment || lastSegment.text.endsWith("\n")) return
-        appendText("\n", false)
-      }
-
-      const collectSegments = (node, bold = false) => {
-        if (node.nodeType === 3) {
-          let text = (node.textContent ?? "").replace(/\s+/g, " ")
-          if (segments.at(-1)?.text.endsWith("\n")) {
-            text = text.trimStart()
+          const previousSegment = segments.at(-1)
+          if (previousSegment?.bold === bold) {
+            previousSegment.text += text
+            return
           }
-          appendText(text, bold)
-          return
+
+          segments.push({ text, bold })
         }
 
-        if (node.nodeType !== 1) return
-        if (node.tagName === "BR") {
-          appendLineBreak()
-          return
+        const appendLineBreak = () => {
+          let lastSegment = segments.at(-1)
+          if (!lastSegment) return
+
+          lastSegment.text = lastSegment.text.trimEnd()
+          if (!lastSegment.text) {
+            segments.pop()
+            lastSegment = segments.at(-1)
+          }
+
+          if (!lastSegment || lastSegment.text.endsWith("\n")) return
+          appendText("\n", false)
         }
 
-        const isBold = bold || node.tagName === "STRONG"
-        for (const childNode of node.childNodes) {
-          collectSegments(childNode, isBold)
+        const collectSegments = (node, bold = false) => {
+          if (node.nodeType === 3) {
+            let text = (node.textContent ?? "").replace(/\s+/g, " ")
+            if (segments.at(-1)?.text.endsWith("\n")) {
+              text = text.trimStart()
+            }
+            appendText(text, bold)
+            return
+          }
+
+          if (node.nodeType !== 1) return
+          if (node.tagName === "BR") {
+            appendLineBreak()
+            return
+          }
+
+          const isBold = bold || node.tagName === "STRONG"
+          for (const childNode of node.childNodes) {
+            collectSegments(childNode, isBold)
+          }
+
+          if (node.tagName === "P") appendLineBreak()
         }
 
-        if (node.tagName === "P") appendLineBreak()
+        collectSegments(element)
+
+        if (segments.length > 0) {
+          segments[0].text = segments[0].text.trimStart()
+          segments.at(-1).text = segments.at(-1).text.trimEnd()
+        }
+
+        return segments.filter(({ text }) => text !== "")
       }
 
-      collectSegments(element)
+      for (const element of elements) {
+        const segments = collectElementSegments(element)
+        if (segments.length === 0) continue
 
-      if (segments.length > 0) {
-        segments[0].text = segments[0].text.trimStart()
-        segments.at(-1).text = segments.at(-1).text.trimEnd()
+        if (allSegments.length > 0) {
+          allSegments.push({ text: "\n\n", bold: false })
+        }
+        allSegments.push(...segments)
       }
 
-      return {
-        segments: segments.filter(({ text }) => text !== ""),
-      }
+      return { segments: allSegments }
     })
+
+    if (notice.segments.length === 0) {
+      log("🟢 DTEK notices are not found.")
+      return null
+    }
+
+    return notice
   } catch (error) {
     try {
-      if ((await notice.count()) === 0) {
-        log("🟢 Emergency outages notice is not found.")
+      if ((await notices.count()) === 0) {
+        log("🟢 DTEK notices are not found.")
         return null
       }
     } catch (countError) {
@@ -273,6 +297,8 @@ export function generateMessage(
   const reason = escapeHtml(capitalize(sub_type))
 
   return [
+    TELEGRAM_MESSAGE_TITLE,
+    "",
     `⚡️ <b>За адресою ${address} зафіксовано відключення</b>`,
     "",
     `🪫 Час початку - ${escapeHtml(start_date)}`,
@@ -331,6 +357,8 @@ export function generateEmergencyOutagesMessage(notice, now = new Date()) {
         .join("")
 
   return [
+    TELEGRAM_MESSAGE_TITLE,
+    "",
     formattedNotice,
     "",
     `🔄 <i>Дата оновлення інформації – ${getCurrentTime(now)}</i>`,

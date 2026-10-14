@@ -80,6 +80,10 @@ test("escapes address and DTEK values in an outage message", () => {
     house,
   })
 
+  assert.match(
+    message,
+    /^<b>Повідомлення з сайту ДТЕК Київські Електромережі<\/b>\n\n/,
+  )
   assert.match(message, /Street &amp; &lt;name&gt;/)
   assert.match(message, /10:00 &amp; later/)
   assert.match(message, /&lt;unknown&gt;/)
@@ -120,7 +124,10 @@ test("escapes a general emergency outages notice", () => {
     new Date("2026-10-08T09:05:00Z"),
   )
 
-  assert.match(message, /^Warning &lt;all&gt; &amp; everyone/)
+  assert.match(
+    message,
+    /^<b>Повідомлення з сайту ДТЕК Київські Електромережі<\/b>\n\nWarning &lt;all&gt; &amp; everyone/,
+  )
   assert.match(message, /12:05 08\.10\.2026/)
 })
 
@@ -132,7 +139,7 @@ test("converts strong emphasis in an emergency notice to Telegram bold", () => {
 
   assert.match(
     message,
-    /^Right bank: <b>emergency &amp; unsafe<\/b>; &lt;em&gt;left bank&lt;\/em&gt;/,
+    /Right bank: <b>emergency &amp; unsafe<\/b>; &lt;em&gt;left bank&lt;\/em&gt;/,
   )
 })
 
@@ -160,7 +167,7 @@ test("hashes normalized visible emergency notice text", () => {
   )
 })
 
-test("extracts all paragraphs from a general emergency outages notice", async () => {
+test("extracts every DTEK notice and preserves its paragraphs", async () => {
   const textNode = (text) => ({ nodeType: 3, textContent: text })
   const elementNode = (tagName, childNodes) => ({
     childNodes,
@@ -182,11 +189,28 @@ test("extracts all paragraphs from a general emergency outages notice", async ()
     ]),
     textNode("\n  "),
   ])
+  const informationElement = elementNode("DIV", [
+    elementNode("P", [textNode("Information for consumers.")]),
+  ])
+  const notices = {
+    evaluateAll: async (callback) =>
+      callback([noticeElement, informationElement]),
+    waitFor: async () => {},
+  }
   const browserPage = {
-    locator: () => ({
-      evaluate: async (callback) => callback(noticeElement),
-      waitFor: async () => {},
-    }),
+    locator: (selector, options) => {
+      assert.equal(selector, ".m-attention__text")
+      assert.equal(options, undefined)
+      return {
+        filter: (filterOptions) => {
+          assert.deepEqual(filterOptions, { visible: true })
+          return {
+            ...notices,
+            first: () => notices,
+          }
+        },
+      }
+    },
   }
 
   assert.deepEqual(await getEmergencyOutagesNotice(browserPage), {
@@ -196,6 +220,8 @@ test("extracts all paragraphs from a general emergency outages notice", async ()
       { bold: false, text: ".\nLeft bank: " },
       { bold: true, text: "scheduled" },
       { bold: false, text: "." },
+      { bold: false, text: "\n\n" },
+      { bold: false, text: "Information for consumers." },
     ],
   })
 })
@@ -210,8 +236,12 @@ test("closes the browser and reports a failed DTEK response", async () => {
     evaluate: async (callback, value) => callback(value),
     goto: async () => {},
     locator: () => ({
-      count: async () => 0,
-      waitFor: async () => Promise.reject(Error("missing")),
+      filter: () => ({
+        count: async () => 0,
+        first: () => ({
+          waitFor: async () => Promise.reject(Error("missing")),
+        }),
+      }),
     }),
     waitForSelector: async () => ({
       getAttribute: async () => "csrf-token",
@@ -241,8 +271,12 @@ test("retries a transient browser launch failure", async () => {
     evaluate: async () => expectedInfo,
     goto: async () => {},
     locator: () => ({
-      count: async () => 0,
-      waitFor: async () => Promise.reject(Error("missing")),
+      filter: () => ({
+        count: async () => 0,
+        first: () => ({
+          waitFor: async () => Promise.reject(Error("missing")),
+        }),
+      }),
     }),
     waitForSelector: async () => ({
       getAttribute: async () => "csrf-token",
@@ -275,8 +309,13 @@ test("retries a transient browser launch failure", async () => {
 test("reports an uncertain emergency notice check instead of treating it as absent", async () => {
   const browserPage = {
     locator: () => ({
-      count: async () => 1,
-      waitFor: async () => Promise.reject(Error("page became unavailable")),
+      filter: () => ({
+        count: async () => 1,
+        first: () => ({
+          waitFor: async () =>
+            Promise.reject(Error("page became unavailable")),
+        }),
+      }),
     }),
   }
 
@@ -286,22 +325,30 @@ test("reports an uncertain emergency notice check instead of treating it as abse
   )
 })
 
-test("ignores a general modal without an emergency outages notice", async () => {
+test("collects a general DTEK notice without keyword filtering", async () => {
   const expectedInfo = createInfo("Аварійне")
+  const expectedNotice = {
+    segments: [{ bold: false, text: "Інформація для споживачів" }],
+  }
+  const notices = {
+    evaluateAll: async () => expectedNotice,
+    waitFor: async () => {},
+  }
   const browserPage = {
     evaluate: async () => expectedInfo,
     goto: async () => {},
-    locator: (selector, { hasText }) => {
+    locator: (selector, options) => {
       assert.equal(selector, ".m-attention__text")
-      assert.equal(hasText.test("Інформація для споживачів"), false)
-      assert.equal(hasText.test("застосовано екстрені відключення"), true)
-      assert.equal(hasText.test("Графіки відключень не діють"), true)
-      assert.equal(hasText.test("зафіксовано аварійне відключення"), true)
-      assert.equal(hasText.test("зникло світло через аварію в мережі"), true)
+      assert.equal(options, undefined)
 
       return {
-        count: async () => 0,
-        waitFor: async () => Promise.reject(Error("missing")),
+        filter: (filterOptions) => {
+          assert.deepEqual(filterOptions, { visible: true })
+          return {
+            ...notices,
+            first: () => notices,
+          }
+        },
       }
     },
     waitForSelector: async () => ({
@@ -317,7 +364,7 @@ test("ignores a general modal without an emergency outages notice", async () => 
 
   assert.deepEqual(await getInfo({ browserType }), {
     ...expectedInfo,
-    emergencyOutagesNotice: null,
+    emergencyOutagesNotice: expectedNotice,
   })
 })
 
