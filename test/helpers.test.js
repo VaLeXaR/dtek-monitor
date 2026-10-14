@@ -66,6 +66,19 @@ test("loads and saves state in isolated files", () => {
   assert.equal(loadEmergencyOutagesState(emergencyStateFile), true)
 })
 
+test("persists an optional source hash with Telegram message state", () => {
+  const lastMessageFile = path.join(temporaryDirectory, "last-message.json")
+  const lastMessage = {
+    date: Date.parse("2026-10-08T09:00:00Z") / 1000,
+    message_id: 456,
+    source_hash: "abc123",
+  }
+
+  saveLastMessage(lastMessage, lastMessageFile)
+
+  assert.deepEqual(loadLastMessage(lastMessageFile), lastMessage)
+})
+
 test("falls back safely when state files are corrupted", () => {
   mock.method(console, "warn", () => {})
   const lastMessageFile = path.join(temporaryDirectory, "last-message.json")

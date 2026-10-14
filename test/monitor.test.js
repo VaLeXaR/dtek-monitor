@@ -7,6 +7,8 @@ import {
   deleteLastNotification,
   generateEmergencyOutagesMessage,
   generateMessage,
+  getAddressOutageMessageHash,
+  getEmergencyOutagesNoticeHash,
   getEmergencyOutagesNotice,
   getInfo,
   run,
@@ -85,6 +87,33 @@ test("escapes address and DTEK values in an outage message", () => {
   assert.match(message, /12:00 &quot;today&quot;/)
 })
 
+test("hashes address outage details without the update timestamp", () => {
+  const outage = createInfo("Аварійне", {
+    start_date: "10:00",
+    end_date: "12:00",
+  })
+  const laterUpdate = {
+    ...outage,
+    updateTimestamp: "08.10.2026 12:10",
+  }
+  const changedOutage = createInfo("Аварійне", {
+    start_date: "10:00",
+    end_date: "13:00",
+  })
+
+  assert.equal(
+    getAddressOutageMessageHash(outage, { street: "Street", house }),
+    getAddressOutageMessageHash(laterUpdate, { street: "Street", house }),
+  )
+  assert.notEqual(
+    getAddressOutageMessageHash(outage, { street: "Street", house }),
+    getAddressOutageMessageHash(changedOutage, {
+      street: "Street",
+      house,
+    }),
+  )
+})
+
 test("escapes a general emergency outages notice", () => {
   const message = generateEmergencyOutagesMessage(
     "Warning <all> & everyone",
@@ -104,6 +133,30 @@ test("converts strong emphasis in an emergency notice to Telegram bold", () => {
   assert.match(
     message,
     /^Right bank: <b>emergency &amp; unsafe<\/b>; &lt;em&gt;left bank&lt;\/em&gt;/,
+  )
+})
+
+test("hashes normalized visible emergency notice text", () => {
+  const plainNotice = {
+    segments: [{ bold: false, text: "  Emergency   outages  " }],
+  }
+  const formattedNotice = {
+    segments: [
+      { bold: false, text: "Emergency " },
+      { bold: true, text: "outages" },
+    ],
+  }
+  const changedNotice = {
+    segments: [{ bold: false, text: "Emergency outage ended" }],
+  }
+
+  assert.equal(
+    getEmergencyOutagesNoticeHash(plainNotice),
+    getEmergencyOutagesNoticeHash(formattedNotice),
+  )
+  assert.notEqual(
+    getEmergencyOutagesNoticeHash(plainNotice),
+    getEmergencyOutagesNoticeHash(changedNotice),
   )
 })
 
@@ -333,6 +386,28 @@ test("keeps Telegram state when deletion fails", async () => {
   assert.equal(cleared, false)
 })
 
+test("clears stale state when a Telegram notification is already missing", async () => {
+  let cleared = false
+  const deleted = await deleteLastNotification({
+    clearLastMessageFn: () => {
+      cleared = true
+    },
+    fetchFn: async () => ({
+      json: async () => ({
+        ok: false,
+        description: "Bad Request: message to delete not found",
+      }),
+      ok: false,
+    }),
+    loadLastMessageFn: () => ({ message_id: 123 }),
+    telegramBotToken: "token",
+    telegramChatId: "chat",
+  })
+
+  assert.equal(deleted, true)
+  assert.equal(cleared, true)
+})
+
 test("keeps the previous Telegram notification when an update fails", async () => {
   let deleted = false
   let saved = false
@@ -401,6 +476,34 @@ test("sends a new Telegram notification when the saved message is missing", asyn
       LAST_MESSAGE_FILE,
     ],
   ])
+})
+
+test("saves a source hash after sending a general notification", async () => {
+  let savedMessage
+  const sent = await sendNotification("message", {
+    fetchFn: async () => ({
+      json: async () => ({
+        ok: true,
+        result: { date: 1_760_277_764, message_id: 456 },
+      }),
+      ok: true,
+    }),
+    lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+    loadLastMessageFn: () => null,
+    saveLastMessageFn: (message) => {
+      savedMessage = message
+    },
+    sourceHash: "current-hash",
+    telegramBotToken: "token",
+    telegramChatId: "chat",
+  })
+
+  assert.equal(sent, true)
+  assert.deepEqual(savedMessage, {
+    date: 1_760_277_764,
+    message_id: 456,
+    source_hash: "current-hash",
+  })
 })
 
 test("retries a transient Telegram failure without clearing state", async () => {
@@ -527,19 +630,48 @@ test("keeps an unchanged general emergency notification", async () => {
     lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
     loadLastMessageFn: (lastMessageFile) => {
       loadedFile = lastMessageFile
-      return { message_id: 123 }
+      return { message_id: 123, source_hash: "same-hash" }
     },
     saveLastMessageFn: () => {
       saved = true
     },
     telegramBotToken: "token",
     telegramChatId: "chat",
+    sourceHash: "same-hash",
   })
 
   assert.equal(sent, true)
   assert.equal(deleted, false)
   assert.equal(loadedFile, EMERGENCY_OUTAGES_MESSAGE_FILE)
   assert.equal(saved, false)
+})
+
+test("stores a source hash for an unchanged legacy notification", async () => {
+  let savedMessage
+  const sent = await sendNotification("same message", {
+    fetchFn: async () => ({
+      json: async () => ({
+        ok: false,
+        description: "Bad Request: message is not modified",
+      }),
+      ok: false,
+    }),
+    lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+    loadLastMessageFn: () => ({ date: 123, message_id: 456 }),
+    saveLastMessageFn: (message) => {
+      savedMessage = message
+    },
+    sourceHash: "current-hash",
+    telegramBotToken: "token",
+    telegramChatId: "chat",
+  })
+
+  assert.equal(sent, true)
+  assert.deepEqual(savedMessage, {
+    date: 123,
+    message_id: 456,
+    source_hash: "current-hash",
+  })
 })
 
 test("updates general emergency and address outage notifications independently", async () => {
@@ -550,6 +682,7 @@ test("updates general emergency and address outage notifications independently",
     checkIsScheduledFn: () => false,
     generateEmergencyOutagesMessageFn: (notice) => `notice: ${notice}`,
     generateMessageFn: () => "address outage",
+    getAddressOutageMessageHashFn: () => "address-hash",
     getInfoFn: async () => ({
       ...createInfo("Аварійне"),
       emergencyOutagesNotice: "Emergency",
@@ -568,10 +701,248 @@ test("updates general emergency and address outage notifications independently",
   ])
 })
 
+test("updates the same general notification when visible text is unchanged", async () => {
+  const notice = {
+    segments: [
+      { bold: false, text: "Emergency " },
+      { bold: true, text: "outages" },
+    ],
+  }
+  const previousNotice = {
+    segments: [{ bold: false, text: "Emergency outages" }],
+  }
+  const calls = []
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
+    deleteLastNotificationFn: async () => {
+      calls.push("delete")
+      return true
+    },
+    generateEmergencyOutagesMessageFn: () => "formatted notice",
+    getInfoFn: async () => ({
+      ...createInfo("Планове"),
+      emergencyOutagesNotice: notice,
+    }),
+    loadEmergencyOutagesStateFn: () => true,
+    loadLastMessageFn: () => ({
+      message_id: 123,
+      source_hash: getEmergencyOutagesNoticeHash(previousNotice),
+    }),
+    sendNotificationFn: async (_message, options) => {
+      calls.push(["send", options])
+      return true
+    },
+  })
+
+  assert.deepEqual(calls, [
+    [
+      "send",
+      {
+        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+        sourceHash: getEmergencyOutagesNoticeHash(notice),
+      },
+    ],
+  ])
+})
+
+test("updates a legacy general notification without replacing it", async () => {
+  const calls = []
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
+    deleteLastNotificationFn: async () => {
+      calls.push("delete")
+      return true
+    },
+    generateEmergencyOutagesMessageFn: () => "current notice",
+    getInfoFn: async () => ({
+      ...createInfo("Планове"),
+      emergencyOutagesNotice: "Current emergency notice",
+    }),
+    loadEmergencyOutagesStateFn: () => true,
+    loadLastMessageFn: () => ({ message_id: 123 }),
+    sendNotificationFn: async (_message, options) => {
+      calls.push(["send", options])
+      return true
+    },
+  })
+
+  assert.deepEqual(calls, [
+    [
+      "send",
+      {
+        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+        sourceHash: getEmergencyOutagesNoticeHash(
+          "Current emergency notice",
+        ),
+      },
+    ],
+  ])
+})
+
+test("replaces a general notification when visible text changes", async () => {
+  const notice = {
+    segments: [{ bold: false, text: "New emergency notice" }],
+  }
+  const calls = []
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
+    deleteLastNotificationFn: async (options) => {
+      calls.push(["delete", options])
+      return true
+    },
+    generateEmergencyOutagesMessageFn: () => "new formatted notice",
+    getInfoFn: async () => ({
+      ...createInfo("Планове"),
+      emergencyOutagesNotice: notice,
+    }),
+    loadEmergencyOutagesStateFn: () => true,
+    loadLastMessageFn: (lastMessageFile) =>
+      lastMessageFile === EMERGENCY_OUTAGES_MESSAGE_FILE
+        ? {
+            message_id: 123,
+            source_hash: getEmergencyOutagesNoticeHash(
+              "Old emergency notice",
+            ),
+          }
+        : null,
+    sendNotificationFn: async (message, options) => {
+      calls.push(["send", message, options])
+      return true
+    },
+  })
+
+  assert.deepEqual(calls, [
+    ["delete", { lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE }],
+    [
+      "send",
+      "new formatted notice",
+      {
+        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+        sourceHash: getEmergencyOutagesNoticeHash(notice),
+      },
+    ],
+  ])
+})
+
+test("does not send a changed general notification when deletion fails", async () => {
+  const messages = []
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => false,
+    deleteLastNotificationFn: async () => false,
+    generateMessageFn: () => "address outage",
+    getAddressOutageMessageHashFn: () => "address-hash",
+    getInfoFn: async () => ({
+      ...createInfo("Планове"),
+      emergencyOutagesNotice: "New emergency notice",
+    }),
+    loadEmergencyOutagesStateFn: () => true,
+    loadLastMessageFn: (lastMessageFile) =>
+      lastMessageFile === EMERGENCY_OUTAGES_MESSAGE_FILE
+        ? {
+            message_id: 123,
+            source_hash: getEmergencyOutagesNoticeHash(
+              "Old emergency notice",
+            ),
+          }
+        : null,
+    sendNotificationFn: async (message) => messages.push(message),
+  })
+
+  assert.deepEqual(messages, ["address outage"])
+})
+
+test("replaces an address notification when outage details change", async () => {
+  const currentOutage = createInfo("Аварійне", {
+    start_date: "10:00",
+    end_date: "13:00",
+  })
+  const previousOutage = createInfo("Аварійне", {
+    start_date: "10:00",
+    end_date: "12:00",
+  })
+  const getSourceHash = (info) =>
+    getAddressOutageMessageHash(info, { street: "Street", house })
+  const calls = []
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => false,
+    deleteLastNotificationFn: async (options) => {
+      calls.push(["delete", options])
+      return true
+    },
+    generateMessageFn: () => "new address outage",
+    getAddressOutageMessageHashFn: getSourceHash,
+    getInfoFn: async () => ({
+      ...currentOutage,
+      emergencyOutagesNotice: null,
+    }),
+    loadEmergencyOutagesStateFn: () => false,
+    loadLastMessageFn: () => ({
+      message_id: 123,
+      source_hash: getSourceHash(previousOutage),
+    }),
+    sendNotificationFn: async (message, options) => {
+      calls.push(["send", message, options])
+      return true
+    },
+  })
+
+  assert.deepEqual(calls, [
+    ["delete", { lastMessageFile: LAST_MESSAGE_FILE }],
+    [
+      "send",
+      "new address outage",
+      {
+        lastMessageFile: LAST_MESSAGE_FILE,
+        sourceHash: getSourceHash(currentOutage),
+      },
+    ],
+  ])
+})
+
+test("does not send a changed address notification when deletion fails", async () => {
+  const currentOutage = createInfo("Аварійне", { end_date: "13:00" })
+  const previousOutage = createInfo("Аварійне", { end_date: "12:00" })
+  const getSourceHash = (info) =>
+    getAddressOutageMessageHash(info, { street: "Street", house })
+  let sent = false
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => false,
+    deleteLastNotificationFn: async () => false,
+    getAddressOutageMessageHashFn: getSourceHash,
+    getInfoFn: async () => ({
+      ...currentOutage,
+      emergencyOutagesNotice: null,
+    }),
+    loadEmergencyOutagesStateFn: () => false,
+    loadLastMessageFn: () => ({
+      message_id: 123,
+      source_hash: getSourceHash(previousOutage),
+    }),
+    sendNotificationFn: async () => {
+      sent = true
+    },
+  })
+
+  assert.equal(sent, false)
+})
+
 test("sends only unscheduled address outage notifications", async () => {
   const messages = []
   const baseDependencies = {
     generateMessageFn: () => "outage",
+    getAddressOutageMessageHashFn: () => "address-hash",
     getInfoFn: async () => ({ data: {} }),
     loadEmergencyOutagesStateFn: () => false,
     sendNotificationFn: async (message) => messages.push(message),

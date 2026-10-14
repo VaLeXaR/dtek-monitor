@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { pathToFileURL } from "node:url"
 
 import { chromium } from "playwright"
@@ -283,6 +284,33 @@ export function generateMessage(
   ].join("\n")
 }
 
+function normalizeSourceValue(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim()
+}
+
+function createSourceHash(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex")
+}
+
+export function getAddressOutageMessageHash(
+  info,
+  { street = STREET, house = HOUSE } = {},
+) {
+  const { sub_type = "", start_date = "", end_date = "" } = getAddressInfo(
+    info,
+    house,
+  )
+  const visibleValues = [
+    street,
+    house,
+    start_date,
+    end_date,
+    capitalize(sub_type),
+  ].map(normalizeSourceValue)
+
+  return createSourceHash(JSON.stringify(visibleValues))
+}
+
 export function generateEmergencyOutagesMessage(notice, now = new Date()) {
   log("🌀 Generating emergency outages message...")
 
@@ -307,6 +335,31 @@ export function generateEmergencyOutagesMessage(notice, now = new Date()) {
     "",
     `🔄 <i>Дата оновлення інформації – ${getCurrentTime(now)}</i>`,
   ].join("\n")
+}
+
+function normalizeEmergencyOutagesNoticeText(notice) {
+  const text = Array.isArray(notice?.segments)
+    ? notice.segments.map(({ text: segmentText }) => segmentText ?? "").join("")
+    : String(notice ?? "").replace(/<\/?strong(?:\s[^<>]*)?>/gi, "")
+
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+}
+
+export function getEmergencyOutagesNoticeHash(notice) {
+  return createSourceHash(normalizeEmergencyOutagesNoticeText(notice))
+}
+
+function hasNotificationSourceChanged(lastMessage, sourceHash) {
+  return (
+    Boolean(lastMessage.message_id) &&
+    typeof lastMessage.source_hash === "string" &&
+    lastMessage.source_hash !== sourceHash
+  )
 }
 
 async function requestTelegram(
@@ -400,6 +453,16 @@ export async function deleteLastNotification({
     )
 
     if (!response.ok || !data.ok) {
+      if (
+        data.description
+          ?.toLowerCase()
+          .includes("message to delete not found")
+      ) {
+        clearLastMessageFn(lastMessageFile)
+        log("🟢 Notification is already deleted.")
+        return true
+      }
+
       throw Error(data.description || "Telegram API request failed.")
     }
 
@@ -425,6 +488,7 @@ export async function sendNotification(
     retryMaxAttempts = RETRY_MAX_ATTEMPTS,
     saveLastMessageFn = saveLastMessage,
     sleepFn,
+    sourceHash,
     telegramBotToken = TELEGRAM_BOT_TOKEN,
     telegramChatId = TELEGRAM_CHAT_ID,
   } = {},
@@ -479,6 +543,15 @@ export async function sendNotification(
         lastMessage.message_id &&
         data.description?.toLowerCase().includes("message is not modified")
       ) {
+        if (
+          typeof sourceHash === "string" &&
+          lastMessage.source_hash !== sourceHash
+        ) {
+          saveLastMessageFn(
+            { ...lastMessage, source_hash: sourceHash },
+            lastMessageFile,
+          )
+        }
         log("🟢 Notification is already up to date.")
         return true
       }
@@ -486,7 +559,15 @@ export async function sendNotification(
       throw Error(data.description || "Telegram API request failed.")
     }
 
-    saveLastMessageFn(data.result, lastMessageFile)
+    saveLastMessageFn(
+      {
+        ...data.result,
+        ...(typeof sourceHash === "string"
+          ? { source_hash: sourceHash }
+          : {}),
+      },
+      lastMessageFile,
+    )
 
     log("🟢 Notification sent.")
     return true
@@ -502,8 +583,10 @@ export async function run({
   deleteLastNotificationFn = deleteLastNotification,
   generateEmergencyOutagesMessageFn = generateEmergencyOutagesMessage,
   generateMessageFn = generateMessage,
+  getAddressOutageMessageHashFn = getAddressOutageMessageHash,
   getInfoFn = getInfo,
   loadEmergencyOutagesStateFn = loadEmergencyOutagesState,
+  loadLastMessageFn = loadLastMessage,
   saveEmergencyOutagesStateFn = saveEmergencyOutagesState,
   sendNotificationFn = sendNotification,
 } = {}) {
@@ -516,12 +599,32 @@ export async function run({
 
   if (emergencyOutagesAction === "send") {
     saveEmergencyOutagesStateFn(true)
-    const message = generateEmergencyOutagesMessageFn(
+    const sourceHash = getEmergencyOutagesNoticeHash(
       info.emergencyOutagesNotice,
     )
-    await sendNotificationFn(message, {
-      lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
-    })
+    const lastEmergencyMessage =
+      loadLastMessageFn(EMERGENCY_OUTAGES_MESSAGE_FILE) || {}
+    const shouldReplaceNotification = hasNotificationSourceChanged(
+      lastEmergencyMessage,
+      sourceHash,
+    )
+    let canSendNotification = true
+
+    if (shouldReplaceNotification) {
+      canSendNotification = await deleteLastNotificationFn({
+        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+      })
+    }
+
+    if (canSendNotification) {
+      const message = generateEmergencyOutagesMessageFn(
+        info.emergencyOutagesNotice,
+      )
+      await sendNotificationFn(message, {
+        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+        sourceHash,
+      })
+    }
   }
 
   if (emergencyOutagesAction === "delete") {
@@ -536,8 +639,27 @@ export async function run({
   const isOutage = checkIsOutageFn(info)
   const isScheduled = checkIsScheduledFn(info)
   if (isOutage && !isScheduled) {
-    const message = generateMessageFn(info)
-    await sendNotificationFn(message, { lastMessageFile: LAST_MESSAGE_FILE })
+    const sourceHash = getAddressOutageMessageHashFn(info)
+    const lastAddressMessage = loadLastMessageFn(LAST_MESSAGE_FILE) || {}
+    const shouldReplaceNotification = hasNotificationSourceChanged(
+      lastAddressMessage,
+      sourceHash,
+    )
+    let canSendNotification = true
+
+    if (shouldReplaceNotification) {
+      canSendNotification = await deleteLastNotificationFn({
+        lastMessageFile: LAST_MESSAGE_FILE,
+      })
+    }
+
+    if (canSendNotification) {
+      const message = generateMessageFn(info)
+      await sendNotificationFn(message, {
+        lastMessageFile: LAST_MESSAGE_FILE,
+        sourceHash,
+      })
+    }
   }
 
   if (!isOutage) {

@@ -36,17 +36,19 @@ export function loadLastMessage(file = LAST_MESSAGE_FILE) {
 }
 
 export function saveLastMessage(
-  { date, message_id } = {},
+  { date, message_id, source_hash } = {},
   file = LAST_MESSAGE_FILE,
 ) {
+  const state = {
+    message_id,
+    date,
+  }
+  if (typeof source_hash === "string") {
+    state.source_hash = source_hash
+  }
+
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(
-    file,
-    JSON.stringify({
-      message_id,
-      date,
-    }),
-  )
+  fs.writeFileSync(file, JSON.stringify(state))
 }
 
 export function clearLastMessage(file = LAST_MESSAGE_FILE) {
