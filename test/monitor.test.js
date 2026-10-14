@@ -241,9 +241,10 @@ test("ignores a general modal without an emergency outages notice", async () => 
     locator: (selector, { hasText }) => {
       assert.equal(selector, ".m-attention__text")
       assert.equal(hasText.test("Інформація для споживачів"), false)
-      assert.equal(hasText.test("Застосовано екстрені відключення"), true)
+      assert.equal(hasText.test("застосовано екстрені відключення"), true)
       assert.equal(hasText.test("Графіки відключень не діють"), true)
       assert.equal(hasText.test("зафіксовано аварійне відключення"), true)
+      assert.equal(hasText.test("зникло світло через аварію в мережі"), true)
 
       return {
         count: async () => 0,
