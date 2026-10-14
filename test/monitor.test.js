@@ -830,6 +830,97 @@ test("updates a legacy general notification without replacing it", async () => {
   ])
 })
 
+test("rotates a general notification before Telegram's deletion deadline", async () => {
+  const now = new Date("2026-10-10T08:00:00Z")
+  const notice = "Current emergency notice"
+  const sourceHash = getEmergencyOutagesNoticeHash(notice)
+  const calls = []
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
+    deleteLastNotificationFn: async (options) => {
+      calls.push(["delete", options])
+      return true
+    },
+    generateEmergencyOutagesMessageFn: () => "current notice",
+    getInfoFn: async () => ({
+      ...createInfo(),
+      emergencyOutagesNotice: notice,
+    }),
+    loadEmergencyOutagesStateFn: () => true,
+    loadLastMessageFn: (lastMessageFile) =>
+      lastMessageFile === EMERGENCY_OUTAGES_MESSAGE_FILE
+        ? {
+            date: now.getTime() / 1000 - 47 * 60 * 60,
+            edit_date: now.getTime() / 1000 - 60,
+            message_id: 123,
+            source_hash: sourceHash,
+          }
+        : null,
+    now,
+    sendNotificationFn: async (message, options) => {
+      calls.push(["send", message, options])
+      return true
+    },
+  })
+
+  assert.deepEqual(calls, [
+    ["delete", { lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE }],
+    [
+      "send",
+      "current notice",
+      {
+        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+        sourceHash,
+      },
+    ],
+  ])
+})
+
+test("keeps a general notification younger than the rotation age", async () => {
+  const now = new Date("2026-10-10T08:00:00Z")
+  const notice = "Current emergency notice"
+  const sourceHash = getEmergencyOutagesNoticeHash(notice)
+  const calls = []
+
+  await run({
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
+    deleteLastNotificationFn: async (options) => {
+      calls.push(["delete", options])
+      return true
+    },
+    generateEmergencyOutagesMessageFn: () => "current notice",
+    getInfoFn: async () => ({
+      ...createInfo("Планове"),
+      emergencyOutagesNotice: notice,
+    }),
+    loadEmergencyOutagesStateFn: () => true,
+    loadLastMessageFn: () => ({
+      date: now.getTime() / 1000 - 47 * 60 * 60 + 1,
+      message_id: 123,
+      source_hash: sourceHash,
+    }),
+    now,
+    sendNotificationFn: async (message, options) => {
+      calls.push(["send", message, options])
+      return true
+    },
+  })
+
+  assert.deepEqual(calls, [
+    [
+      "send",
+      "current notice",
+      {
+        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+        sourceHash,
+      },
+    ],
+  ])
+})
+
 test("replaces a general notification when visible text changes", async () => {
   const notice = {
     segments: [{ bold: false, text: "New emergency notice" }],

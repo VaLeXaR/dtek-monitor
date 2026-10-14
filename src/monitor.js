@@ -388,6 +388,17 @@ function hasNotificationSourceChanged(lastMessage, sourceHash) {
   )
 }
 
+const TELEGRAM_MESSAGE_ROTATION_AGE_SECONDS = 47 * 60 * 60
+
+function hasNotificationReachedRotationAge(lastMessage, now) {
+  const sentAt = Number(lastMessage.date)
+  if (!lastMessage.message_id || !Number.isFinite(sentAt) || sentAt <= 0) {
+    return false
+  }
+
+  return now.getTime() / 1000 - sentAt >= TELEGRAM_MESSAGE_ROTATION_AGE_SECONDS
+}
+
 async function requestTelegram(
   method,
   body,
@@ -613,6 +624,7 @@ export async function run({
   getInfoFn = getInfo,
   loadEmergencyOutagesStateFn = loadEmergencyOutagesState,
   loadLastMessageFn = loadLastMessage,
+  now = new Date(),
   saveEmergencyOutagesStateFn = saveEmergencyOutagesState,
   sendNotificationFn = sendNotification,
 } = {}) {
@@ -630,10 +642,9 @@ export async function run({
     )
     const lastEmergencyMessage =
       loadLastMessageFn(EMERGENCY_OUTAGES_MESSAGE_FILE) || {}
-    const shouldReplaceNotification = hasNotificationSourceChanged(
-      lastEmergencyMessage,
-      sourceHash,
-    )
+    const shouldReplaceNotification =
+      hasNotificationSourceChanged(lastEmergencyMessage, sourceHash) ||
+      hasNotificationReachedRotationAge(lastEmergencyMessage, now)
     let canSendNotification = true
 
     if (shouldReplaceNotification) {
