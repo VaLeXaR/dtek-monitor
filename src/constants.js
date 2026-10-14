@@ -19,7 +19,9 @@ function readInteger(name, fallback, { min, max }) {
   return number
 }
 
-export const SHUTDOWNS_PAGE = "https://www.dtek-kem.com.ua/ua/shutdowns"
+export const SHUTDOWNS_PAGE = "https://www.dtek-kem.com.ua/ua"
+export const TELEGRAM_MESSAGE_TITLE =
+  "<b>Повідомлення з сайту ДТЕК Київські Електромережі</b>"
 
 export const RETRY_MAX_ATTEMPTS = readInteger("RETRY_MAX_ATTEMPTS", 3, {
   min: 1,

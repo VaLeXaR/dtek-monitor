@@ -13,6 +13,7 @@ import {
   STREET,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
+  TELEGRAM_MESSAGE_TITLE,
 } from "./constants.js"
 
 import {
@@ -30,9 +31,6 @@ import {
   saveLastMessage,
 } from "./helpers.js"
 import { log, logError } from "./logger.js"
-
-const TELEGRAM_MESSAGE_TITLE =
-  "<b>Повідомлення з сайту ДТЕК Київські Електромережі</b>"
 
 export async function getEmergencyOutagesNotice(browserPage) {
   log("🌀 Checking emergency outages notice...")
