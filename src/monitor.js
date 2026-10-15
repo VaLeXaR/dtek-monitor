@@ -36,7 +36,9 @@ export async function getEmergencyOutagesNotice(browserPage) {
   log("🌀 Checking emergency outages notice...")
 
   const notices = browserPage
-    .locator(".m-attention__text")
+    .locator(".m-attention__text", {
+      hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
+    })
     .filter({ visible: true })
 
   try {

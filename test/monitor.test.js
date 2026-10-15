@@ -167,7 +167,7 @@ test("hashes normalized visible emergency notice text", () => {
   )
 })
 
-test("extracts every DTEK notice and preserves its paragraphs", async () => {
+test("extracts matching DTEK notices and preserves their paragraphs", async () => {
   const textNode = (text) => ({ nodeType: 3, textContent: text })
   const elementNode = (tagName, childNodes) => ({
     childNodes,
@@ -177,30 +177,28 @@ test("extracts every DTEK notice and preserves its paragraphs", async () => {
   const noticeElement = elementNode("DIV", [
     textNode("\n    "),
     elementNode("P", [
-      textNode("  Right bank: "),
+      textNode("  Right bank: зафіксовано "),
       elementNode("STRONG", [textNode("emergency")]),
       textNode(".  "),
     ]),
     textNode("\n    "),
     elementNode("P", [
-      textNode("Left bank: "),
+      textNode("Left bank: застосовано "),
       elementNode("STRONG", [textNode("scheduled")]),
       textNode(".  "),
     ]),
     textNode("\n  "),
   ])
-  const informationElement = elementNode("DIV", [
-    elementNode("P", [textNode("Information for consumers.")]),
-  ])
   const notices = {
-    evaluateAll: async (callback) =>
-      callback([noticeElement, informationElement]),
+    evaluateAll: async (callback) => callback([noticeElement]),
     waitFor: async () => {},
   }
   const browserPage = {
     locator: (selector, options) => {
       assert.equal(selector, ".m-attention__text")
-      assert.equal(options, undefined)
+      assert.deepEqual(options, {
+        hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
+      })
       return {
         filter: (filterOptions) => {
           assert.deepEqual(filterOptions, { visible: true })
@@ -215,13 +213,11 @@ test("extracts every DTEK notice and preserves its paragraphs", async () => {
 
   assert.deepEqual(await getEmergencyOutagesNotice(browserPage), {
     segments: [
-      { bold: false, text: "Right bank: " },
+      { bold: false, text: "Right bank: зафіксовано " },
       { bold: true, text: "emergency" },
-      { bold: false, text: ".\nLeft bank: " },
+      { bold: false, text: ".\nLeft bank: застосовано " },
       { bold: true, text: "scheduled" },
       { bold: false, text: "." },
-      { bold: false, text: "\n\n" },
-      { bold: false, text: "Information for consumers." },
     ],
   })
 })
@@ -325,10 +321,10 @@ test("reports an uncertain emergency notice check instead of treating it as abse
   )
 })
 
-test("collects a general DTEK notice without keyword filtering", async () => {
+test("collects a matching general DTEK notice", async () => {
   const expectedInfo = createInfo("Аварійне")
   const expectedNotice = {
-    segments: [{ bold: false, text: "Інформація для споживачів" }],
+    segments: [{ bold: false, text: "Застосовано аварійні графіки" }],
   }
   const notices = {
     evaluateAll: async () => expectedNotice,
@@ -339,7 +335,9 @@ test("collects a general DTEK notice without keyword filtering", async () => {
     goto: async () => {},
     locator: (selector, options) => {
       assert.equal(selector, ".m-attention__text")
-      assert.equal(options, undefined)
+      assert.deepEqual(options, {
+        hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
+      })
 
       return {
         filter: (filterOptions) => {
