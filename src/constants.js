@@ -41,11 +41,3 @@ export const QUIET_HOURS_END = readInteger("QUIET_HOURS_END", 8, {
 })
 
 export const LAST_MESSAGE_FILE = path.resolve("artifacts", `last-message.json`)
-export const EMERGENCY_OUTAGES_MESSAGE_FILE = path.resolve(
-  "artifacts",
-  "emergency-outages-message.json",
-)
-export const EMERGENCY_OUTAGES_STATE_FILE = path.resolve(
-  "artifacts",
-  "emergency-outages.json",
-)

@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url"
 import { chromium } from "playwright"
 
 import {
-  EMERGENCY_OUTAGES_MESSAGE_FILE,
   HOUSE,
   LAST_MESSAGE_FILE,
   RETRY_DELAY_MS,
@@ -20,132 +19,12 @@ import {
   capitalize,
   clearLastMessage,
   escapeHtml,
-  getEmergencyOutagesAction,
-  getCurrentTime,
   isQuietHours,
-  loadEmergencyOutagesState,
   loadLastMessage,
-  migrateEmergencyOutagesMessageState,
   retry,
-  saveEmergencyOutagesState,
   saveLastMessage,
 } from "./helpers.js"
 import { log, logError } from "./logger.js"
-
-export async function getEmergencyOutagesNotice(browserPage) {
-  log("🌀 Checking emergency outages notice...")
-
-  const notices = browserPage
-    .locator(".m-attention__text", {
-      hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
-    })
-    .filter({ visible: true })
-
-  try {
-    await notices.first().waitFor({ state: "visible", timeout: 3000 })
-    log("🚨 DTEK notices detected!")
-    const notice = await notices.evaluateAll((elements) => {
-      const allSegments = []
-
-      const collectElementSegments = (element) => {
-        const segments = []
-
-        const appendText = (text, bold) => {
-          if (!text) return
-
-          const previousSegment = segments.at(-1)
-          if (previousSegment?.bold === bold) {
-            previousSegment.text += text
-            return
-          }
-
-          segments.push({ text, bold })
-        }
-
-        const appendLineBreak = () => {
-          let lastSegment = segments.at(-1)
-          if (!lastSegment) return
-
-          lastSegment.text = lastSegment.text.trimEnd()
-          if (!lastSegment.text) {
-            segments.pop()
-            lastSegment = segments.at(-1)
-          }
-
-          if (!lastSegment || lastSegment.text.endsWith("\n")) return
-          appendText("\n", false)
-        }
-
-        const collectSegments = (node, bold = false) => {
-          if (node.nodeType === 3) {
-            let text = (node.textContent ?? "").replace(/\s+/g, " ")
-            if (segments.at(-1)?.text.endsWith("\n")) {
-              text = text.trimStart()
-            }
-            appendText(text, bold)
-            return
-          }
-
-          if (node.nodeType !== 1) return
-          if (node.tagName === "BR") {
-            appendLineBreak()
-            return
-          }
-
-          const isBold = bold || node.tagName === "STRONG"
-          for (const childNode of node.childNodes) {
-            collectSegments(childNode, isBold)
-          }
-
-          if (node.tagName === "P") appendLineBreak()
-        }
-
-        collectSegments(element)
-
-        if (segments.length > 0) {
-          segments[0].text = segments[0].text.trimStart()
-          segments.at(-1).text = segments.at(-1).text.trimEnd()
-        }
-
-        return segments.filter(({ text }) => text !== "")
-      }
-
-      for (const element of elements) {
-        const segments = collectElementSegments(element)
-        if (segments.length === 0) continue
-
-        if (allSegments.length > 0) {
-          allSegments.push({ text: "\n\n", bold: false })
-        }
-        allSegments.push(...segments)
-      }
-
-      return { segments: allSegments }
-    })
-
-    if (notice.segments.length === 0) {
-      log("🟢 DTEK notices are not found.")
-      return null
-    }
-
-    return notice
-  } catch (error) {
-    try {
-      if ((await notices.count()) === 0) {
-        log("🟢 DTEK notices are not found.")
-        return null
-      }
-    } catch (countError) {
-      throw Error(
-        `❌ Emergency outages notice check failed: ${countError.message}`,
-      )
-    }
-
-    throw Error(
-      `❌ Emergency outages notice check failed: ${error.message}`,
-    )
-  }
-}
 
 export async function getInfo({
   browserType = chromium,
@@ -166,9 +45,6 @@ export async function getInfo({
         await browserPage.goto(SHUTDOWNS_PAGE, {
           waitUntil: "load",
         })
-
-        const emergencyOutagesNotice =
-          await getEmergencyOutagesNotice(browserPage)
 
         const csrfTokenTag = await browserPage.waitForSelector(
           'meta[name="csrf-token"]',
@@ -207,7 +83,7 @@ export async function getInfo({
         )
 
         log("✅ Getting info finished.")
-        return { ...info, emergencyOutagesNotice }
+        return info
       } catch (error) {
         throw Error(`❌ Getting info failed: ${error.message}`)
       } finally {
@@ -265,20 +141,17 @@ export function checkIsOutage(info, house = HOUSE) {
   return isOutageDetected
 }
 
-export function checkIsScheduled(info, house = HOUSE) {
-  log("🌀 Checking whether power outage scheduled...")
+export function checkIsAccident(info, house = HOUSE) {
+  log("🌀 Checking whether power outage is accidental...")
 
   const { sub_type = "" } = getAddressInfo(info, house)
-  const normalizedSubtype = String(sub_type).toLowerCase()
-  const isScheduled =
-    !normalizedSubtype.includes("екстрен") &&
-    !normalizedSubtype.includes("аварій")
+  const isAccident = String(sub_type).toLowerCase().includes("аварій")
 
-  isScheduled
-    ? log("🗓️ Power outage scheduled!")
-    : log("⚠️ Power outage not scheduled!")
+  isAccident
+    ? log("🚨 Accidental power outage detected!")
+    : log("⚡️ No accidental power outage!")
 
-  return isScheduled
+  return isAccident
 }
 
 export function generateMessage(
@@ -337,68 +210,12 @@ export function getAddressOutageMessageHash(
   return createSourceHash(JSON.stringify(visibleValues))
 }
 
-export function generateEmergencyOutagesMessage(notice, now = new Date()) {
-  log("🌀 Generating emergency outages message...")
-
-  const formattedNotice = Array.isArray(notice?.segments)
-    ? notice.segments
-        .map(({ text, bold }) => {
-          const escapedText = escapeHtml(text)
-          return bold ? `<b>${escapedText}</b>` : escapedText
-        })
-        .join("")
-    : String(notice ?? "")
-        .split(/(<\/?strong(?:\s[^<>]*)?>)/gi)
-        .map((part) => {
-          if (/^<strong(?:\s[^<>]*)?>$/i.test(part)) return "<b>"
-          if (/^<\/strong>$/i.test(part)) return "</b>"
-          return escapeHtml(part)
-        })
-        .join("")
-
-  return [
-    TELEGRAM_MESSAGE_TITLE,
-    "",
-    formattedNotice,
-    "",
-    `🔄 <i>Дата оновлення інформації – ${getCurrentTime(now)}</i>`,
-  ].join("\n")
-}
-
-function normalizeEmergencyOutagesNoticeText(notice) {
-  const text = Array.isArray(notice?.segments)
-    ? notice.segments.map(({ text: segmentText }) => segmentText ?? "").join("")
-    : String(notice ?? "").replace(/<\/?strong(?:\s[^<>]*)?>/gi, "")
-
-  return text
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .join("\n")
-}
-
-export function getEmergencyOutagesNoticeHash(notice) {
-  return createSourceHash(normalizeEmergencyOutagesNoticeText(notice))
-}
-
 function hasNotificationSourceChanged(lastMessage, sourceHash) {
   return (
     Boolean(lastMessage.message_id) &&
     typeof lastMessage.source_hash === "string" &&
     lastMessage.source_hash !== sourceHash
   )
-}
-
-const TELEGRAM_MESSAGE_ROTATION_AGE_SECONDS = 47 * 60 * 60
-
-function hasNotificationReachedRotationAge(lastMessage, now) {
-  const sentAt = Number(lastMessage.date)
-  if (!lastMessage.message_id || !Number.isFinite(sentAt) || sentAt <= 0) {
-    return false
-  }
-
-  return now.getTime() / 1000 - sentAt >= TELEGRAM_MESSAGE_ROTATION_AGE_SECONDS
 }
 
 async function requestTelegram(
@@ -618,66 +435,19 @@ export async function sendNotification(
 
 export async function run({
   checkIsOutageFn = checkIsOutage,
-  checkIsScheduledFn = checkIsScheduled,
+  checkIsAccidentFn = checkIsAccident,
   deleteLastNotificationFn = deleteLastNotification,
-  generateEmergencyOutagesMessageFn = generateEmergencyOutagesMessage,
   generateMessageFn = generateMessage,
   getAddressOutageMessageHashFn = getAddressOutageMessageHash,
   getInfoFn = getInfo,
-  loadEmergencyOutagesStateFn = loadEmergencyOutagesState,
   loadLastMessageFn = loadLastMessage,
-  now = new Date(),
-  saveEmergencyOutagesStateFn = saveEmergencyOutagesState,
   sendNotificationFn = sendNotification,
 } = {}) {
   const info = await getInfoFn()
-  const emergencyOutagesWereActive = loadEmergencyOutagesStateFn()
-  const emergencyOutagesAction = getEmergencyOutagesAction(
-    info.emergencyOutagesNotice,
-    emergencyOutagesWereActive,
-  )
-
-  if (emergencyOutagesAction === "send") {
-    saveEmergencyOutagesStateFn(true)
-    const sourceHash = getEmergencyOutagesNoticeHash(
-      info.emergencyOutagesNotice,
-    )
-    const lastEmergencyMessage =
-      loadLastMessageFn(EMERGENCY_OUTAGES_MESSAGE_FILE) || {}
-    const shouldReplaceNotification =
-      hasNotificationSourceChanged(lastEmergencyMessage, sourceHash) ||
-      hasNotificationReachedRotationAge(lastEmergencyMessage, now)
-    let canSendNotification = true
-
-    if (shouldReplaceNotification) {
-      canSendNotification = await deleteLastNotificationFn({
-        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
-      })
-    }
-
-    if (canSendNotification) {
-      const message = generateEmergencyOutagesMessageFn(
-        info.emergencyOutagesNotice,
-      )
-      await sendNotificationFn(message, {
-        lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
-        sourceHash,
-      })
-    }
-  }
-
-  if (emergencyOutagesAction === "delete") {
-    const notificationDeleted = await deleteLastNotificationFn({
-      lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
-    })
-    if (notificationDeleted) {
-      saveEmergencyOutagesStateFn(false)
-    }
-  }
 
   const isOutage = checkIsOutageFn(info)
-  const isScheduled = checkIsScheduledFn(info)
-  if (isOutage && !isScheduled) {
+  const isAccident = checkIsAccidentFn(info)
+  if (isOutage && isAccident) {
     const sourceHash = getAddressOutageMessageHashFn(info)
     const lastAddressMessage = loadLastMessageFn(LAST_MESSAGE_FILE) || {}
     const shouldReplaceNotification = hasNotificationSourceChanged(
@@ -701,15 +471,12 @@ export async function run({
     }
   }
 
-  if (!isOutage) {
+  if (!isAccident) {
     await deleteLastNotificationFn({ lastMessageFile: LAST_MESSAGE_FILE })
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  migrateEmergencyOutagesMessageState({
-    emergencyMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
-  })
   run().catch((error) => {
     logError(error.message)
     process.exitCode = 1

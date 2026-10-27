@@ -37,10 +37,7 @@ jobs:
           else
             git worktree add --orphan -b artifacts artifacts
 
-            for file in \
-              last-message.json \
-              emergency-outages-message.json \
-              emergency-outages.json
+            for file in last-message.json
             do
               source_commit=$(git log --diff-filter=AM --format=%H -1 -- "artifacts/$file")
               if [ -n "$source_commit" ]; then
