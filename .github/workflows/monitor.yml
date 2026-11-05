@@ -70,6 +70,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STREET: ${{ secrets.STREET }}
           HOUSE: ${{ secrets.HOUSE }}
+          KYIV_BANK: ${{ vars.KYIV_BANK }}
+          KYIV_DISTRICT: ${{ vars.KYIV_DISTRICT }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_TIMEOUT_MS: ${{ vars.LLM_TIMEOUT_MS }}
           RETRY_MAX_ATTEMPTS: ${{ vars.RETRY_MAX_ATTEMPTS }}
           RETRY_DELAY_MS: ${{ vars.RETRY_DELAY_MS }}
           QUIET_HOURS_START: ${{ vars.QUIET_HOURS_START }}

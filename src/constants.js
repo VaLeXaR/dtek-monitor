@@ -3,6 +3,19 @@ import path from "node:path"
 export const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, STREET, HOUSE } =
   process.env
 
+export const KYIV_BANK = process.env.KYIV_BANK?.trim() || ""
+export const KYIV_DISTRICT = process.env.KYIV_DISTRICT?.trim() || ""
+export const LLM_API_KEY = process.env.LLM_API_KEY || ""
+export const LLM_BASE_URL =
+  process.env.LLM_BASE_URL?.trim() ||
+  "https://generativelanguage.googleapis.com/v1beta/openai"
+export const LLM_MODEL = process.env.LLM_MODEL?.trim() || "gemini-3.1-flash-lite"
+export const LLM_TIMEOUT_MS = readInteger("LLM_TIMEOUT_MS", 30000, {
+  min: 1,
+  max: 120000,
+})
+export const LLM_CACHE_FILE = path.resolve("artifacts", "llm-notice-cache.json")
+
 function readInteger(name, fallback, { min, max }) {
   const value = process.env[name]
   if (value === undefined || value === "") return fallback

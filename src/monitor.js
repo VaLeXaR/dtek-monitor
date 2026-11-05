@@ -31,14 +31,13 @@ import {
   saveLastMessage,
 } from "./helpers.js"
 import { log, logError } from "./logger.js"
+import { analyzeEmergencyNotice } from "./llm.js"
 
 export async function getEmergencyOutagesNotice(browserPage) {
   log("🌀 Checking emergency outages notice...")
 
   const notices = browserPage
-    .locator(".m-attention__text", {
-      hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
-    })
+    .locator(".m-attention__text")
     .filter({ visible: true })
 
   try {
@@ -617,6 +616,7 @@ export async function sendNotification(
 }
 
 export async function run({
+  analyzeEmergencyNoticeFn = analyzeEmergencyNotice,
   checkIsOutageFn = checkIsOutage,
   checkIsScheduledFn = checkIsScheduled,
   deleteLastNotificationFn = deleteLastNotification,
@@ -632,10 +632,29 @@ export async function run({
 } = {}) {
   const info = await getInfoFn()
   const emergencyOutagesWereActive = loadEmergencyOutagesStateFn()
-  const emergencyOutagesAction = getEmergencyOutagesAction(
-    info.emergencyOutagesNotice,
-    emergencyOutagesWereActive,
-  )
+  let emergencyOutagesAction = null
+  if (info.emergencyOutagesNotice) {
+    try {
+      const analysis = await analyzeEmergencyNoticeFn(
+        info.emergencyOutagesNotice,
+        { now },
+      )
+      if (analysis?.status === "affected") emergencyOutagesAction = "send"
+      if (analysis?.status === "not_affected") {
+        emergencyOutagesAction = getEmergencyOutagesAction(
+          null,
+          emergencyOutagesWereActive,
+        )
+      }
+    } catch {
+      log("⚠️ Помилка аналізу модалки. Стан загального сповіщення збережено.")
+    }
+  } else {
+    emergencyOutagesAction = getEmergencyOutagesAction(
+      null,
+      emergencyOutagesWereActive,
+    )
+  }
 
   if (emergencyOutagesAction === "send") {
     saveEmergencyOutagesStateFn(true)

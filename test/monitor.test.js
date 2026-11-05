@@ -196,9 +196,7 @@ test("extracts matching DTEK notices and preserves their paragraphs", async () =
   const browserPage = {
     locator: (selector, options) => {
       assert.equal(selector, ".m-attention__text")
-      assert.deepEqual(options, {
-        hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
-      })
+      assert.equal(options, undefined)
       return {
         filter: (filterOptions) => {
           assert.deepEqual(filterOptions, { visible: true })
@@ -335,9 +333,7 @@ test("collects a matching general DTEK notice", async () => {
     goto: async () => {},
     locator: (selector, options) => {
       assert.equal(selector, ".m-attention__text")
-      assert.deepEqual(options, {
-        hasText: /застосовано|не діють|зафіксовано|зникло світло/i,
-      })
+      assert.equal(options, undefined)
 
       return {
         filter: (filterOptions) => {
@@ -723,6 +719,7 @@ test("updates general emergency and address outage notifications independently",
   const savedStates = []
   const messages = []
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => false,
     generateEmergencyOutagesMessageFn: (notice) => `notice: ${notice}`,
@@ -759,6 +756,7 @@ test("updates the same general notification when visible text is unchanged", asy
   const calls = []
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async () => {
@@ -796,6 +794,7 @@ test("updates a legacy general notification without replacing it", async () => {
   const calls = []
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async () => {
@@ -835,6 +834,7 @@ test("rotates a general notification before Telegram's deletion deadline", async
   const calls = []
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async (options) => {
@@ -883,6 +883,7 @@ test("keeps a general notification younger than the rotation age", async () => {
   const calls = []
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async (options) => {
@@ -926,6 +927,7 @@ test("replaces a general notification when visible text changes", async () => {
   const calls = []
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async (options) => {
@@ -970,6 +972,7 @@ test("does not send a changed general notification when deletion fails", async (
   const messages = []
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => false,
     deleteLastNotificationFn: async () => false,
@@ -1009,6 +1012,7 @@ test("replaces an address notification when outage details change", async () => 
   const calls = []
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => false,
     deleteLastNotificationFn: async (options) => {
@@ -1053,6 +1057,7 @@ test("does not send a changed address notification when deletion fails", async (
   let sent = false
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => false,
     deleteLastNotificationFn: async () => false,
@@ -1085,11 +1090,13 @@ test("sends only unscheduled address outage notifications", async () => {
   }
 
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     ...baseDependencies,
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
   })
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     ...baseDependencies,
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => false,
@@ -1101,6 +1108,7 @@ test("sends only unscheduled address outage notifications", async () => {
 test("deletes the previous address notification when no outage remains", async () => {
   let deleted = false
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => false,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async () => {
@@ -1117,6 +1125,7 @@ test("resets emergency state only after its notification is deleted", async () =
   const savedStates = []
   const deletedFiles = []
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async ({ lastMessageFile }) => {
@@ -1138,6 +1147,7 @@ test("resets emergency state only after its notification is deleted", async () =
 test("keeps emergency state when its notification cannot be deleted", async () => {
   const savedStates = []
   await run({
+    analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
     checkIsOutageFn: () => true,
     checkIsScheduledFn: () => true,
     deleteLastNotificationFn: async () => false,
@@ -1150,4 +1160,56 @@ test("keeps emergency state when its notification cannot be deleted", async () =
   })
 
   assert.deepEqual(savedStates, [])
+})
+
+for (const outcome of ["unknown", "error", "not_affected"]) {
+  for (const deletionSucceeds of [true, false]) {
+    test(`handles LLM ${outcome} with deletion=${deletionSucceeds} independently of address outage`, async () => {
+      const deleted = []
+      const states = []
+      const sent = []
+      await run({
+        analyzeEmergencyNoticeFn: async () => {
+          if (outcome === "error") throw Error("LLM failure")
+          return { status: outcome }
+        },
+        getInfoFn: async () => ({ emergencyOutagesNotice: "DTEK notice" }),
+        loadEmergencyOutagesStateFn: () => true,
+        loadLastMessageFn: () => ({}),
+        saveEmergencyOutagesStateFn: (state) => states.push(state),
+        checkIsOutageFn: () => true,
+        checkIsScheduledFn: () => false,
+        getAddressOutageMessageHashFn: () => "address-hash",
+        generateMessageFn: () => "Address outage",
+        sendNotificationFn: async (message) => sent.push(message),
+        deleteLastNotificationFn: async ({ lastMessageFile }) => {
+          deleted.push(lastMessageFile)
+          return deletionSucceeds
+        },
+      })
+      assert.deepEqual(sent, ["Address outage"])
+      assert.deepEqual(
+        deleted,
+        outcome === "not_affected" ? [EMERGENCY_OUTAGES_MESSAGE_FILE] : [],
+      )
+      assert.deepEqual(
+        states,
+        outcome === "not_affected" && deletionSucceeds ? [false] : [],
+      )
+    })
+  }
+}
+
+test("does not call LLM when the modal is absent", async () => {
+  let called = false
+  await run({
+    analyzeEmergencyNoticeFn: async () => {
+      called = true
+    },
+    getInfoFn: async () => ({ emergencyOutagesNotice: null }),
+    loadEmergencyOutagesStateFn: () => false,
+    checkIsOutageFn: () => true,
+    checkIsScheduledFn: () => true,
+  })
+  assert.equal(called, false)
 })
