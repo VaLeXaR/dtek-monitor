@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import {
+  EMERGENCY_OUTAGES_STATE_FILE,
   LAST_MESSAGE_FILE,
   QUIET_HOURS_END,
   QUIET_HOURS_START,
@@ -21,6 +22,7 @@ function readJsonFile(file, fallback) {
     return fallback
   }
 }
+
 export function capitalize(str) {
   if (typeof str !== "string") return ""
   return str[0].toUpperCase() + str.slice(1).toLowerCase()
@@ -52,6 +54,52 @@ export function saveLastMessage(
 export function clearLastMessage(file = LAST_MESSAGE_FILE) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, JSON.stringify({}))
+}
+
+export function loadEmergencyOutagesState(
+  file = EMERGENCY_OUTAGES_STATE_FILE,
+) {
+  const state = readJsonFile(file, null)
+
+  return state?.active === true
+}
+
+export function saveEmergencyOutagesState(
+  active,
+  file = EMERGENCY_OUTAGES_STATE_FILE,
+) {
+  fs.mkdirSync(path.dirname(file), {
+    recursive: true,
+  })
+  fs.writeFileSync(file, JSON.stringify({ active }))
+}
+
+export function getEmergencyOutagesAction(notice, wereActive) {
+  if (notice) return "send"
+  if (wereActive) return "delete"
+  return null
+}
+
+export function migrateEmergencyOutagesMessageState({
+  emergencyMessageFile,
+  emergencyStateFile = EMERGENCY_OUTAGES_STATE_FILE,
+  lastMessageFile = LAST_MESSAGE_FILE,
+} = {}) {
+  if (!emergencyMessageFile || fs.existsSync(emergencyMessageFile)) {
+    return false
+  }
+
+  if (!loadEmergencyOutagesState(emergencyStateFile)) return false
+
+  const lastMessage = loadLastMessage(lastMessageFile)
+  if (lastMessage) {
+    saveLastMessage(lastMessage, emergencyMessageFile)
+    clearLastMessage(lastMessageFile)
+  } else {
+    clearLastMessage(emergencyMessageFile)
+  }
+
+  return true
 }
 
 export function escapeHtml(value) {
@@ -107,4 +155,18 @@ export async function retry(
       attempt += 1
     }
   }
+}
+
+export function getCurrentTime(now = new Date()) {
+  const date = now.toLocaleDateString("uk-UA", {
+    timeZone: "Europe/Kyiv",
+  })
+
+  const time = now.toLocaleTimeString("uk-UA", {
+    timeZone: "Europe/Kyiv",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+
+  return `${time} ${date}`
 }
