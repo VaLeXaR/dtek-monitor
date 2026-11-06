@@ -314,3 +314,55 @@ test("keeps valid inference when the cache cannot be written", async (t) => {
   fs.mkdirSync(options.cacheFile)
   assert.equal((await analyzeEmergencyNotice(text, options)).status, "affected")
 })
+
+test("reports invalid configuration before contacting the provider", async (t) => {
+  const { options, calls } = setup(t)
+  for (const [change, reason] of [
+    [{ bank: "" }, /KYIV_BANK має бути/],
+    [{ district: "" }, /KYIV_DISTRICT має містити/],
+    [{ bank: "right" }, /не відповідає берегу/],
+    [{ apiKey: " " }, /встановити LLM_API_KEY/],
+    [{ baseUrl: "fictional-key invalid URL" }, /Некоректний LLM_BASE_URL/],
+  ]) {
+    await analyzeEmergencyNotice(text, { ...options, ...change })
+    const warning = console.warn.mock.calls.at(-1).arguments.join(" ")
+    assert.match(warning, reason)
+    assert.ok(!warning.includes(options.apiKey))
+  }
+  assert.equal(calls.length, 0)
+})
+
+test("reports API and network failures without logging provider text", async (t) => {
+  for (const [fetchFn, reason] of [
+    [
+      async () => new Response("fictional-key", { status: 429 }),
+      /HTTP 429.*квоту/,
+    ],
+    [
+      async () => {
+        throw new DOMException("fictional-key", "TimeoutError")
+      },
+      /час очікування/,
+    ],
+    [
+      async () => {
+        throw Error("fictional-key", { cause: { code: "ENOTFOUND" } })
+      },
+      /DNS/,
+    ],
+    [async () => new Response("fictional-key"), /API LLM.*JSON/],
+    [
+      async () => Response.json({
+        choices: [{ message: { content: "fictional-key" } }],
+      }),
+      /текст.*JSON/,
+    ],
+    [async () => Response.json({ choices: [] }), /Немає текстової відповіді/],
+  ]) {
+    const { options } = setup(t, { fetchFn })
+    assert.equal((await analyzeEmergencyNotice(text, options)).status, "unknown")
+    const warning = console.warn.mock.calls.at(-1).arguments.join(" ")
+    assert.match(warning, reason)
+    assert.ok(!warning.includes(options.apiKey))
+  }
+})

@@ -36,6 +36,29 @@ const DISTRICT_BANKS = {
   Шевченківський: "right",
 }
 
+// Only messages constructed here are safe to log. Provider errors may echo secrets.
+class LlmError extends Error {}
+
+function describeError(error) {
+  if (error instanceof LlmError) return error.message
+  if (["TimeoutError", "AbortError"].includes(error?.name)) {
+    return "Перевищено час очікування LLM_TIMEOUT_MS."
+  }
+  const networkErrors = {
+    ENOTFOUND: "Не вдалося знайти сервер LLM (DNS).",
+    EAI_AGAIN: "Тимчасова помилка DNS сервера LLM.",
+    ECONNREFUSED: "Сервер LLM відхилив з'єднання.",
+    ECONNRESET: "З'єднання з LLM перервано.",
+    ETIMEDOUT: "Перевищено час встановлення з'єднання з LLM.",
+    UND_ERR_CONNECT_TIMEOUT: "Перевищено час встановлення з'єднання з LLM.",
+    CERT_HAS_EXPIRED: "Сертифікат сервера LLM прострочений.",
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: "Не вдалося перевірити сертифікат сервера LLM.",
+  }
+  return Object.hasOwn(networkErrors, error?.cause?.code)
+    ? networkErrors[error.cause.code]
+    : "Помилка запиту до LLM; перевірте доступність API та мережі."
+}
+
 export function validateLocation(bank, district) {
   const normalizedDistrict = String(district ?? "")
     .trim()
@@ -45,13 +68,13 @@ export function validateLocation(bank, district) {
     (name) => name.toLowerCase() === normalizedDistrict.toLowerCase(),
   )
   if (!["left", "right"].includes(bank)) {
-    throw Error("KYIV_BANK має бути left або right.")
+    throw new LlmError("KYIV_BANK має бути left або right.")
   }
   if (!canonicalDistrict) {
-    throw Error("KYIV_DISTRICT має містити назву адміністративного району Києва.")
+    throw new LlmError("KYIV_DISTRICT має містити назву адміністративного району Києва.")
   }
   if (DISTRICT_BANKS[canonicalDistrict] !== bank) {
-    throw Error("KYIV_DISTRICT не відповідає берегу KYIV_BANK.")
+    throw new LlmError("KYIV_DISTRICT не відповідає берегу KYIV_BANK.")
   }
   return { bank, district: canonicalDistrict }
 }
@@ -93,8 +116,15 @@ Never claim that a specific building is without power. Do not invent facts or us
 }
 
 export function parseModelResponse(content, text) {
-  if (typeof content !== "string") throw Error("Немає текстової відповіді LLM.")
-  const result = JSON.parse(content)
+  if (typeof content !== "string") {
+    throw new LlmError("Немає текстової відповіді LLM.")
+  }
+  let result
+  try {
+    result = JSON.parse(content)
+  } catch {
+    throw new LlmError("LLM повернула текст, який не є коректним JSON.")
+  }
   if (
     !result ||
     !["affected", "not_affected", "unknown"].includes(result.status) ||
@@ -104,7 +134,7 @@ export function parseModelResponse(content, text) {
     (result.evidence !== "" && !text.includes(result.evidence)) ||
     (result.status !== "unknown" && !result.evidence.trim())
   ) {
-    throw Error("Некоректний формат або цитата у відповіді LLM.")
+    throw new LlmError("Некоректний формат або цитата у відповіді LLM.")
   }
   if (
     result.status === "affected" &&
@@ -137,14 +167,19 @@ export async function analyzeEmergencyNotice(
 ) {
   try {
     const location = validateLocation(bank, district)
-    if (!apiKey.trim()) throw Error("Потрібно встановити LLM_API_KEY.")
-    const endpoint = new URL(`${baseUrl.replace(/\/+$/, "")}/chat/completions`)
+    if (!apiKey.trim()) throw new LlmError("Потрібно встановити LLM_API_KEY.")
+    let endpoint
+    try {
+      endpoint = new URL(`${baseUrl.replace(/\/+$/, "")}/chat/completions`)
+    } catch {
+      throw new LlmError("Некоректний LLM_BASE_URL.")
+    }
     if (
       !["http:", "https:"].includes(endpoint.protocol) ||
       endpoint.username ||
       endpoint.password
     ) {
-      throw Error("Некоректний LLM_BASE_URL.")
+      throw new LlmError("Некоректний LLM_BASE_URL.")
     }
     const text = Array.isArray(notice?.segments)
       ? notice.segments.map(({ text }) => text ?? "").join("")
@@ -203,10 +238,24 @@ export async function analyzeEmergencyNotice(
       }
     }
     if (!response.ok) {
-      warn(`⚠️ LLM повернула HTTP ${response.status}.`)
-      throw Error("LLM request failed")
+      const hints = {
+        400: "Перевірте LLM_MODEL і сумісність API із Chat Completions.",
+        401: "Перевірте LLM_API_KEY.",
+        403: "Перевірте дозволи ключа, проєкту та доступність API у вашому регіоні.",
+        404: "Перевірте LLM_BASE_URL і доступність LLM_MODEL.",
+        429: "Перевищено квоту або ліміт запитів; перевірте ліміти та білінг провайдера.",
+      }
+      throw new LlmError(
+        `LLM повернула HTTP ${response.status}. ${hints[response.status] || "API провайдера тимчасово недоступний."}`,
+      )
     }
-    const data = await response.json()
+    let data
+    try {
+      data = await response.json()
+    } catch (error) {
+      if (signal.aborted) throw error
+      throw new LlmError("API LLM повернув відповідь, яка не є коректним JSON.")
+    }
     const result = parseModelResponse(data?.choices?.[0]?.message?.content, text)
     if (result.status !== "unknown") {
       try {
@@ -223,10 +272,10 @@ export async function analyzeEmergencyNotice(
     }
     log(`🤖 Результат перевірки LLM: ${result.status}.`)
     return result
-  } catch {
-    // Do not log errors, bodies, URLs, or model output that might contain a key.
+  } catch (error) {
+    // Never print arbitrary error messages, bodies, URLs, or model output.
     warn(
-      "⚠️ Не вдалося визначити відключення через LLM. Перевірте налаштування та доступність API; стан сповіщення збережено.",
+      `⚠️ Не вдалося визначити відключення через LLM: ${describeError(error)} Стан сповіщення збережено.`,
     )
     return { ...UNKNOWN }
   }
