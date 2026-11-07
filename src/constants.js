@@ -62,3 +62,11 @@ export const EMERGENCY_OUTAGES_STATE_FILE = path.resolve(
   "artifacts",
   "emergency-outages.json",
 )
+export const ADDRESS_REMOVAL_MESSAGE_FILE = path.resolve(
+  "artifacts",
+  "address-removal-message.json",
+)
+export const EMERGENCY_REMOVAL_MESSAGE_FILE = path.resolve(
+  "artifacts",
+  "emergency-removal-message.json",
+)

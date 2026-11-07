@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url"
 import { chromium } from "playwright"
 
 import {
+  ADDRESS_REMOVAL_MESSAGE_FILE,
+  EMERGENCY_REMOVAL_MESSAGE_FILE,
   EMERGENCY_OUTAGES_MESSAGE_FILE,
   HOUSE,
   LAST_MESSAGE_FILE,
@@ -390,6 +392,12 @@ function hasNotificationSourceChanged(lastMessage, sourceHash) {
 }
 
 const TELEGRAM_MESSAGE_ROTATION_AGE_SECONDS = 47 * 60 * 60
+const REMOVAL_MESSAGE_LIFETIME_SECONDS = 36 * 60 * 60
+
+const REMOVAL_MESSAGE_SUFFIX =
+  "Це не означає, що світло повернулося. Будь ласка, розумно споживайте електроенергію — це допоможе зменшити навантаження на мережу та уникнути екстрених відключень."
+const GENERAL_REMOVAL_MESSAGE = `Повідомлення про загальні екстренні/аварійні відключення прибрані з сайту ДТЕК. ${REMOVAL_MESSAGE_SUFFIX}`
+const ADDRESS_REMOVAL_MESSAGE = `Повідомлення про адресне відключення прибране з сайту ДТЕК. ${REMOVAL_MESSAGE_SUFFIX}`
 
 function hasNotificationReachedRotationAge(lastMessage, now) {
   const sentAt = Number(lastMessage.date)
@@ -453,6 +461,11 @@ export async function deleteLastNotification({
   fetchFn = globalThis.fetch,
   lastMessageFile = LAST_MESSAGE_FILE,
   loadLastMessageFn = loadLastMessage,
+  removalMessage,
+  removalMessageFile,
+  loadRemovalMessageFn = loadLastMessage,
+  saveRemovalMessageFn = saveLastMessage,
+  now = new Date(),
   retryDelayMs = RETRY_DELAY_MS,
   retryFn = retry,
   retryMaxAttempts = RETRY_MAX_ATTEMPTS,
@@ -490,18 +503,34 @@ export async function deleteLastNotification({
       },
     )
 
-    if (!response.ok || !data.ok) {
-      if (
-        data.description
-          ?.toLowerCase()
-          .includes("message to delete not found")
-      ) {
-        clearLastMessageFn(lastMessageFile)
-        log("🟢 Notification is already deleted.")
-        return true
-      }
-
+    const alreadyDeleted = data.description
+      ?.toLowerCase()
+      .includes("message to delete not found")
+    if ((!response.ok || !data.ok) && !alreadyDeleted) {
       throw Error(data.description || "Telegram API request failed.")
+    }
+
+    if (
+      removalMessage &&
+      (!removalMessageFile ||
+        !loadRemovalMessageFn(removalMessageFile)?.message_id)
+    ) {
+      const sent = await sendNotification(removalMessage, {
+        fetchFn,
+        lastMessageFile: removalMessageFile,
+        loadLastMessageFn: () => null,
+        now,
+        retryDelayMs,
+        retryFn,
+        retryMaxAttempts,
+        saveLastMessageFn: removalMessageFile
+          ? saveRemovalMessageFn
+          : () => {},
+        sleepFn,
+        telegramBotToken,
+        telegramChatId,
+      })
+      if (!sent) return false
     }
 
     clearLastMessageFn(lastMessageFile)
@@ -626,6 +655,7 @@ export async function run({
   getInfoFn = getInfo,
   loadEmergencyOutagesStateFn = loadEmergencyOutagesState,
   loadLastMessageFn = loadLastMessage,
+  loadRemovalMessageFn = loadLastMessage,
   now = new Date(),
   saveEmergencyOutagesStateFn = saveEmergencyOutagesState,
   sendNotificationFn = sendNotification,
@@ -656,7 +686,30 @@ export async function run({
     )
   }
 
-  if (emergencyOutagesAction === "send") {
+  const isOutage = checkIsOutageFn(info)
+  const isScheduled = checkIsScheduledFn(info)
+  const removalMessagesCleared = new Map()
+  for (const [file, outageReturned] of [
+    [EMERGENCY_REMOVAL_MESSAGE_FILE, emergencyOutagesAction === "send"],
+    [ADDRESS_REMOVAL_MESSAGE_FILE, isOutage && !isScheduled],
+  ]) {
+    const removalMessage = loadRemovalMessageFn(file)
+    const sentAt = Number(removalMessage?.date)
+    const expired =
+      Number.isFinite(sentAt) &&
+      sentAt > 0 &&
+      now.getTime() / 1000 - sentAt >= REMOVAL_MESSAGE_LIFETIME_SECONDS
+    let cleared = true
+    if (removalMessage?.message_id && (outageReturned || expired)) {
+      cleared = await deleteLastNotificationFn({ lastMessageFile: file })
+    }
+    removalMessagesCleared.set(file, cleared)
+  }
+
+  if (
+    emergencyOutagesAction === "send" &&
+    removalMessagesCleared.get(EMERGENCY_REMOVAL_MESSAGE_FILE)
+  ) {
     saveEmergencyOutagesStateFn(true)
     const sourceHash = getEmergencyOutagesNoticeHash(
       info.emergencyOutagesNotice,
@@ -688,15 +741,20 @@ export async function run({
   if (emergencyOutagesAction === "delete") {
     const notificationDeleted = await deleteLastNotificationFn({
       lastMessageFile: EMERGENCY_OUTAGES_MESSAGE_FILE,
+      removalMessage: GENERAL_REMOVAL_MESSAGE,
+      removalMessageFile: EMERGENCY_REMOVAL_MESSAGE_FILE,
+      now,
     })
     if (notificationDeleted) {
       saveEmergencyOutagesStateFn(false)
     }
   }
 
-  const isOutage = checkIsOutageFn(info)
-  const isScheduled = checkIsScheduledFn(info)
-  if (isOutage && !isScheduled) {
+  if (
+    isOutage &&
+    !isScheduled &&
+    removalMessagesCleared.get(ADDRESS_REMOVAL_MESSAGE_FILE)
+  ) {
     const sourceHash = getAddressOutageMessageHashFn(info)
     const lastAddressMessage = loadLastMessageFn(LAST_MESSAGE_FILE) || {}
     const shouldReplaceNotification = hasNotificationSourceChanged(
@@ -721,7 +779,12 @@ export async function run({
   }
 
   if (!isOutage) {
-    await deleteLastNotificationFn({ lastMessageFile: LAST_MESSAGE_FILE })
+    await deleteLastNotificationFn({
+      lastMessageFile: LAST_MESSAGE_FILE,
+      removalMessage: ADDRESS_REMOVAL_MESSAGE,
+      removalMessageFile: ADDRESS_REMOVAL_MESSAGE_FILE,
+      now,
+    })
   }
 }
 

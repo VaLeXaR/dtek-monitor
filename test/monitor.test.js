@@ -1,5 +1,13 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import test, { afterEach, beforeEach, mock } from "node:test"
+
+import {
+  loadLastMessage,
+  saveLastMessage,
+} from "../src/helpers.js"
 
 import {
   checkIsOutage,
@@ -15,11 +23,110 @@ import {
   sendNotification,
 } from "../src/monitor.js"
 import {
+  ADDRESS_REMOVAL_MESSAGE_FILE,
+  EMERGENCY_REMOVAL_MESSAGE_FILE,
   EMERGENCY_OUTAGES_MESSAGE_FILE,
   LAST_MESSAGE_FILE,
 } from "../src/constants.js"
 
 const house = "1"
+
+for (const [kind, messageFile, prefix] of [
+  [
+    "general",
+    EMERGENCY_OUTAGES_MESSAGE_FILE,
+    "Повідомлення про загальні екстренні/аварійні відключення прибрані з сайту ДТЕК.",
+  ],
+  [
+    "address",
+    LAST_MESSAGE_FILE,
+    "Повідомлення про адресне відключення прибране з сайту ДТЕК.",
+  ],
+]) {
+  test(`sends a ${kind} removal explanation once and retries Telegram failures`, async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "dtek-removal-"))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const stateFile = path.join(directory, "message.json")
+    const removalStateFile = path.join(directory, "removal.json")
+    saveLastMessage({ message_id: 123, date: 123 }, stateFile)
+    const requests = []
+    let phase = "delete failure"
+    let active = kind === "general"
+    const dependencies = {
+      now: new Date("2026-10-08T20:00:00Z"),
+      getInfoFn: async () => ({ emergencyOutagesNotice: null }),
+      checkIsOutageFn: () => kind === "general",
+      checkIsScheduledFn: () => true,
+      loadEmergencyOutagesStateFn: () => active,
+      loadRemovalMessageFn: () => null,
+      saveEmergencyOutagesStateFn: (value) => {
+        active = value
+      },
+      deleteLastNotificationFn: async (options) => {
+        assert.equal(options.lastMessageFile, messageFile)
+        return deleteLastNotification({
+          ...options,
+          lastMessageFile: stateFile,
+          removalMessageFile: removalStateFile,
+          telegramBotToken: "token",
+          telegramChatId: "chat",
+          retryMaxAttempts: 1,
+          fetchFn: async (url, request) => {
+            const method = url.split("/").at(-1)
+            requests.push([method, JSON.parse(request.body)])
+            const ok =
+              (phase === "success" && method === "sendMessage") ||
+              (phase === "send failure" && method === "deleteMessage")
+            return {
+              ok,
+              json: async () => ({
+                ok,
+                description:
+                  phase === "success" && method === "deleteMessage"
+                    ? "Bad Request: message to delete not found"
+                    : "failed",
+                result: { message_id: 456, date: 456 },
+              }),
+            }
+          },
+        })
+      },
+    }
+
+    await run(dependencies)
+    assert.deepEqual(requests.map(([method]) => method), [
+      "deleteMessage",
+    ])
+    assert.equal(loadLastMessage(stateFile).message_id, 123)
+    assert.equal(active, kind === "general")
+
+    phase = "send failure"
+    await run(dependencies)
+    assert.equal(loadLastMessage(stateFile).message_id, 123)
+    assert.equal(active, kind === "general")
+
+    phase = "success"
+    await run(dependencies)
+    assert.deepEqual(loadLastMessage(stateFile), {})
+    assert.deepEqual(loadLastMessage(removalStateFile), {
+      message_id: 456,
+      date: 456,
+    })
+    assert.equal(active, false)
+    const [, body] = requests.at(-1)
+    assert.equal(
+      body.text,
+      `${prefix} Це не означає, що світло повернулося. Будь ласка, розумно споживайте електроенергію — це допоможе зменшити навантаження на мережу та уникнути екстрених відключень.`,
+    )
+    assert.equal(body.parse_mode, "HTML")
+    assert.equal(body.disable_notification, true)
+    assert.equal(body.message_id, undefined)
+
+    const requestCount = requests.length
+    await run(dependencies)
+    assert.equal(requests.length, requestCount)
+  })
+}
 
 function createInfo(subType = "", overrides = {}) {
   return {
@@ -33,6 +140,125 @@ function createInfo(subType = "", overrides = {}) {
       },
     },
     updateTimestamp: "08.10.2026 12:00",
+  }
+}
+
+for (const [kind, outageFile, removalFile] of [
+  ["general", EMERGENCY_OUTAGES_MESSAGE_FILE, EMERGENCY_REMOVAL_MESSAGE_FILE],
+  ["address", LAST_MESSAGE_FILE, ADDRESS_REMOVAL_MESSAGE_FILE],
+]) {
+  for (const trigger of ["return", "expiry"]) {
+    test(`cleans up ${kind} cancellation on ${trigger}, preserving state on failure`, async (t) => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "dtek-lifecycle-"))
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+      const localFile = (file) => path.join(directory, path.basename(file))
+      let now = new Date("2026-10-24T20:00:00Z")
+      const sentAt = now.getTime()
+      let outage = false
+      let emergencyActive = kind === "general"
+      let deletionFails = false
+      let messageId = 200
+      const requests = []
+      const fetchFn = async (url, options) => {
+        const method = url.split("/").at(-1)
+        const body = JSON.parse(options.body)
+        requests.push({ method, body })
+        const ok = method !== "deleteMessage" || !deletionFails
+        return {
+          ok,
+          json: async () => ({
+            ok,
+            description: ok ? undefined : "Deletion failed",
+            result: {
+              message_id: ++messageId,
+              date: now.getTime() / 1000,
+            },
+          }),
+        }
+      }
+      saveLastMessage({ message_id: 100, date: sentAt / 1000 }, localFile(outageFile))
+      const check = () => run({
+        now,
+        getInfoFn: async () => ({
+          emergencyOutagesNotice: kind === "general" && outage ? "Notice" : null,
+        }),
+        analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
+        checkIsOutageFn: () => kind === "address" && outage,
+        checkIsScheduledFn: () => false,
+        generateMessageFn: () => "Address outage",
+        generateEmergencyOutagesMessageFn: () => "General outage",
+        getAddressOutageMessageHashFn: () => "address-hash",
+        loadLastMessageFn: (file) => loadLastMessage(localFile(file)),
+        loadRemovalMessageFn: (file) => loadLastMessage(localFile(file)),
+        loadEmergencyOutagesStateFn: () => emergencyActive,
+        saveEmergencyOutagesStateFn: (active) => { emergencyActive = active },
+        deleteLastNotificationFn: (options) => deleteLastNotification({
+          ...options,
+          lastMessageFile: localFile(options.lastMessageFile),
+          removalMessageFile: options.removalMessageFile
+            ? localFile(options.removalMessageFile)
+            : undefined,
+          fetchFn,
+          telegramBotToken: "token",
+          telegramChatId: "chat",
+          retryMaxAttempts: 1,
+        }),
+        sendNotificationFn: (message, options) => sendNotification(message, {
+          ...options,
+          lastMessageFile: localFile(options.lastMessageFile),
+          now,
+          fetchFn,
+          telegramBotToken: "token",
+          telegramChatId: "chat",
+          retryMaxAttempts: 1,
+        }),
+      })
+
+      await check()
+      const cancellation = loadLastMessage(localFile(removalFile))
+      assert.ok(cancellation.message_id)
+      assert.equal(cancellation.date, sentAt / 1000)
+      assert.deepEqual(loadLastMessage(localFile(outageFile)), {})
+      const otherRemovalFile = kind === "general"
+        ? ADDRESS_REMOVAL_MESSAGE_FILE
+        : EMERGENCY_REMOVAL_MESSAGE_FILE
+      if (trigger === "return") {
+        saveLastMessage(
+          { message_id: 999, date: sentAt / 1000 },
+          localFile(otherRemovalFile),
+        )
+      }
+      const count = requests.length
+      now = new Date(sentAt + 36 * 60 * 60 * 1000 - 1)
+      await check()
+      assert.equal(requests.length, count)
+
+      if (trigger === "return") {
+        outage = true
+      } else {
+        now = new Date(sentAt + 36 * 60 * 60 * 1000)
+      }
+      deletionFails = true
+      await check()
+      assert.deepEqual(loadLastMessage(localFile(removalFile)), cancellation)
+      assert.equal(requests.length, count + 1)
+      assert.equal(requests.at(-1).body.message_id, cancellation.message_id)
+
+      deletionFails = false
+      await check()
+      assert.deepEqual(loadLastMessage(localFile(removalFile)), {})
+      assert.equal(requests[count + 1].method, "deleteMessage")
+      assert.equal(requests[count + 1].body.message_id, cancellation.message_id)
+      if (trigger === "return") {
+        assert.equal(requests[count + 2].method, "sendMessage")
+        assert.ok(loadLastMessage(localFile(outageFile)).message_id)
+        assert.equal(loadLastMessage(localFile(otherRemovalFile)).message_id, 999)
+      } else {
+        assert.equal(requests.length, count + 2)
+        await check()
+        assert.equal(requests.length, count + 2)
+      }
+    })
   }
 }
 
