@@ -226,3 +226,26 @@ test("ignores corrupted session data without logging its content", async (t) => 
   assert.equal(messages.length, 3)
   assert.doesNotMatch(messages.join("\n"), /private/)
 })
+
+test("reports a safe filesystem error code while preserving existing session data", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "dtek-unwritable-"))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const file = path.join(directory, "state.json")
+  const contents = JSON.stringify({ cookies: [], origins: [] })
+  fs.writeFileSync(file, contents)
+  const messages = []
+  mock.method(console, "warn", (...args) => messages.push(args.join(" ")))
+  mock.method(fs, "writeFileSync", () => {
+    const error = Error("private session and path must not be logged")
+    error.code = "EACCES"
+    throw error
+  })
+  await saveBrowserState(
+    { storageState: async () => ({ cookies: [], origins: [] }) },
+    file
+  )
+  assert.equal(fs.readFileSync(file, "utf8"), contents)
+  assert.equal(messages.length, 1)
+  assert.match(messages[0], /EACCES/)
+  assert.doesNotMatch(messages[0], /private|must not be logged/)
+})

@@ -24,6 +24,7 @@ export function loadBrowserState(file) {
 export async function saveBrowserState(context, file) {
   if (!context || !file) return
   const temporaryFile = `${file}.${process.pid}.tmp`
+  let stage = "BROWSER_STATE"
   try {
     const state = await context.storageState()
     // Keep only the target site's cookies and local storage, never analytics.
@@ -33,14 +34,26 @@ export async function saveBrowserState(context, file) {
     state.origins = state.origins.filter(
       ({ origin }) => origin === "https://www.dtek-kem.com.ua"
     )
+    stage = "WRITE_FAILED"
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     fs.writeFileSync(temporaryFile, JSON.stringify(state), {
       flag: "wx",
       mode: 0o600,
     })
     fs.renameSync(temporaryFile, file)
-  } catch {
-    warn("⚠️ Сесію браузера ДТЕК не вдалося зберегти.")
+  } catch (error) {
+    const code = [
+      "EACCES",
+      "EPERM",
+      "EROFS",
+      "ENOSPC",
+      "EDQUOT",
+      "EEXIST",
+      "ENOENT",
+    ].includes(error.code)
+      ? error.code
+      : stage
+    warn(`⚠️ Сесію браузера ДТЕК не вдалося зберегти (${code}).`)
   } finally {
     try {
       fs.rmSync(temporaryFile, { force: true })
