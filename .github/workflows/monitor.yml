@@ -65,6 +65,7 @@ jobs:
         run: npx playwright install chromium
 
       - name: Run monitoring script
+        id: monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -83,6 +84,7 @@ jobs:
         run: node ./src/monitor.js
 
       - name: Commit updated artifacts
+        if: ${{ !cancelled() && (steps.monitor.outcome == 'success' || steps.monitor.outcome == 'failure') }}
         shell: bash
         run: |
           git config user.name "github-actions"

@@ -10,6 +10,7 @@ services:
       - .env
     environment:
       TZ: Europe/Kyiv
+      DTEK_BROWSER_STATE_FILE: /app/artifacts/.dtek-browser-state.json
     shm_size: 1gb
     volumes:
       - monitor-state:/app/artifacts

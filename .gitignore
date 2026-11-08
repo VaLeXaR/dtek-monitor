@@ -2,3 +2,4 @@ node_modules
 .playwright-cli
 .env
 /artifacts/
+/.cache/

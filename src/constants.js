@@ -32,7 +32,10 @@ function readInteger(name, fallback, { min, max }) {
   return number
 }
 
-export const SHUTDOWNS_PAGE = "https://www.dtek-kem.com.ua/ua"
+export const SHUTDOWNS_PAGE = "https://www.dtek-kem.com.ua/ua/shutdowns"
+export const DTEK_BROWSER_STATE_FILE = path.resolve(
+  process.env.DTEK_BROWSER_STATE_FILE || ".cache/dtek-browser-state.json",
+)
 export const TELEGRAM_MESSAGE_TITLE =
   "<b>Повідомлення з сайту ДТЕК Київські Електромережі</b>"
 

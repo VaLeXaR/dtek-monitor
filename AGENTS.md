@@ -25,6 +25,7 @@ Node.js version. The project has no compilation step.
 | Path | Purpose |
 | --- | --- |
 | `src/monitor.js` | Browser automation, DTEK requests, outage detection, Telegram API, and a single monitoring run |
+| `src/dtek.js` | Native DTEK form interaction, response validation, and private browser session persistence |
 | `src/helpers.js` | JSON state persistence and date/text formatting |
 | `src/constants.js` | Environment variables, the DTEK URL, and state file paths |
 | `test/*.test.js` | Isolated `node:test` coverage for monitor behavior and state helpers |
@@ -108,7 +109,8 @@ corrupted state.
 
 - `npm start`, `npm run watch`, `node src/monitor.js`, and starting the Compose
   service contact DTEK, may send, edit, or delete Telegram messages, and update
-  state. Importing `src/monitor.js` also starts a check. Use isolated mocks for
+  state. Importing `src/monitor.js` does not start a check; its direct-execution
+  guard starts `run()` only when the file is the entry point. Use isolated mocks for
   routine validation; run live checks when they are within the user's request.
 - Do not print or commit `.env`, tokens, private addresses, or full Telegram
   URLs containing tokens. Use fictional values in examples.

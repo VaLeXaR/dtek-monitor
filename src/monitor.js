@@ -5,6 +5,7 @@ import { chromium } from "playwright"
 
 import {
   ADDRESS_REMOVAL_MESSAGE_FILE,
+  DTEK_BROWSER_STATE_FILE,
   EMERGENCY_REMOVAL_MESSAGE_FILE,
   EMERGENCY_OUTAGES_MESSAGE_FILE,
   HOUSE,
@@ -34,6 +35,13 @@ import {
 } from "./helpers.js"
 import { log, logError } from "./logger.js"
 import { analyzeEmergencyNotice } from "./llm.js"
+import {
+  DTEK_TIMEOUT_MS,
+  getAddressInfoFromForm,
+  loadBrowserState,
+  saveBrowserState,
+  waitForDtekPage,
+} from "./dtek.js"
 
 export async function getEmergencyOutagesNotice(browserPage) {
   log("🌀 Checking emergency outages notice...")
@@ -150,83 +158,74 @@ export async function getEmergencyOutagesNotice(browserPage) {
 
 export async function getInfo({
   browserType = chromium,
+  browserStateFile = DTEK_BROWSER_STATE_FILE,
+  getAddressInfoFn = getAddressInfoFromForm,
   retryDelayMs = RETRY_DELAY_MS,
   retryFn = retry,
   retryMaxAttempts = RETRY_MAX_ATTEMPTS,
   sleepFn,
 } = {}) {
-  return retryFn(
-    async () => {
-      log("🌀 Getting info...")
-
-      let browser
-      try {
-        browser = await browserType.launch({ headless: true })
-        const browserPage = await browser.newPage()
-
-        await browserPage.goto(SHUTDOWNS_PAGE, {
-          waitUntil: "load",
-        })
-
-        const emergencyOutagesNotice =
-          await getEmergencyOutagesNotice(browserPage)
-
-        const csrfTokenTag = await browserPage.waitForSelector(
-          'meta[name="csrf-token"]',
-          { state: "attached" },
-        )
-        const csrfToken = await csrfTokenTag.getAttribute("content")
-
-        const info = await browserPage.evaluate(
-          async ({ STREET, csrfToken }) => {
-            const formData = new URLSearchParams()
-            formData.append("method", "getHomeNum")
-            formData.append("data[0][name]", "street")
-            formData.append("data[0][value]", STREET)
-            formData.append("data[1][name]", "updateFact")
-            formData.append(
-              "data[1][value]",
-              new Date().toLocaleString("uk-UA"),
-            )
-
-            const response = await fetch("/ua/ajax", {
-              method: "POST",
-              headers: {
-                "x-requested-with": "XMLHttpRequest",
-                "x-csrf-token": csrfToken,
-              },
-              body: formData,
-            })
-
-            if (!response.ok) {
-              throw Error(`DTEK request failed with status ${response.status}.`)
+  let partialInfo
+  let browser
+  let context
+  let browserPage
+  try {
+    return await retryFn(
+      async () => {
+        // Only fall back to the notice verified during the final attempt.
+        partialInfo = undefined
+        log("🌀 Getting info...")
+        try {
+          browser ||= await browserType.launch({ headless: true })
+          if (!context) {
+            const storageState = loadBrowserState(browserStateFile)
+            const options = { locale: "uk-UA", timezoneId: "Europe/Kyiv" }
+            try {
+              context = await browser.newContext({ ...options, storageState })
+            } catch (error) {
+              if (!storageState) throw error
+              log("⚠️ Збережена сесія ДТЕК непридатна; створюється нова.")
+              context = await browser.newContext(options)
             }
+          }
+          browserPage ||= await context.newPage()
+          browserPage.setDefaultTimeout(DTEK_TIMEOUT_MS)
+          await browserPage.goto(SHUTDOWNS_PAGE, {
+            waitUntil: "load",
+            timeout: DTEK_TIMEOUT_MS,
+          })
+          await waitForDtekPage(browserPage)
 
-            return await response.json()
-          },
-          { STREET, csrfToken },
-        )
+          const emergencyOutagesNotice =
+            await getEmergencyOutagesNotice(browserPage)
+          partialInfo = { emergencyOutagesNotice }
 
-        log("✅ Getting info finished.")
-        return { ...info, emergencyOutagesNotice }
-      } catch (error) {
-        throw Error(`❌ Getting info failed: ${error.message}`)
-      } finally {
-        await browser?.close()
-      }
-    },
-    {
-      delayMs: retryDelayMs,
-      maxAttempts: retryMaxAttempts,
-      onRetry: (error, { attempt, nextDelay }) => {
-        log(
-          `⚠️ DTEK attempt ${attempt} failed; retrying in ${nextDelay} ms.`,
-          error.message,
-        )
+          const info = await getAddressInfoFn(browserPage, STREET)
+          log("✅ Getting info finished.")
+          return { ...info, emergencyOutagesNotice }
+        } catch (error) {
+          throw Error(`❌ Getting info failed: ${error.message}`)
+        }
       },
-      sleepFn,
-    },
-  )
+      {
+        delayMs: retryDelayMs,
+        maxAttempts: retryMaxAttempts,
+        onRetry: (error, { attempt, nextDelay }) => {
+          log(
+            `⚠️ DTEK attempt ${attempt} failed; retrying in ${nextDelay} ms (same browser session).`,
+            error.message
+          )
+        },
+        sleepFn,
+      }
+    ).catch((addressError) => {
+      if (!partialInfo) throw addressError
+      return { ...partialInfo, addressError }
+    })
+  } finally {
+    await saveBrowserState(context, browserStateFile)
+    await browser?.close()
+  }
 }
 
 function getAddressInfo(info, house) {
@@ -686,13 +685,26 @@ export async function run({
     )
   }
 
-  const isOutage = checkIsOutageFn(info)
-  const isScheduled = checkIsScheduledFn(info)
+  let addressError = info.addressError
+  let isOutage
+  let isScheduled
+  if (!addressError) {
+    try {
+      isOutage = checkIsOutageFn(info)
+      isScheduled = checkIsScheduledFn(info)
+    } catch (error) {
+      addressError = error
+    }
+  }
+  if (addressError) {
+    log("⚠️ Адресні дані недоступні. Стан адресного сповіщення збережено.")
+  }
   const removalMessagesCleared = new Map()
   for (const [file, outageReturned] of [
     [EMERGENCY_REMOVAL_MESSAGE_FILE, emergencyOutagesAction === "send"],
     [ADDRESS_REMOVAL_MESSAGE_FILE, isOutage && !isScheduled],
   ]) {
+    if (addressError && file === ADDRESS_REMOVAL_MESSAGE_FILE) continue
     const removalMessage = loadRemovalMessageFn(file)
     const sentAt = Number(removalMessage?.date)
     const expired =
@@ -749,6 +761,8 @@ export async function run({
       saveEmergencyOutagesStateFn(false)
     }
   }
+
+  if (addressError) throw addressError
 
   if (
     isOutage &&

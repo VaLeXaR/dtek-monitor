@@ -29,7 +29,49 @@ import {
   LAST_MESSAGE_FILE,
 } from "../src/constants.js"
 
+import { readAddressResponse } from "../src/dtek.js"
+
 const house = "1"
+
+function createDtekBrowser(notice = null, goto = async () => {}) {
+  const stats = { launches: 0, contexts: 0, visits: 0, closed: 0 }
+  const notices = {
+    waitFor: async () => {},
+    evaluateAll: async () => notice || { segments: [] },
+  }
+  const page = {
+    setDefaultTimeout: () => {},
+    goto: async (...args) => {
+      stats.visits += 1
+      await goto(...args)
+    },
+    locator: (selector) => {
+      if (selector === 'meta[name="csrf-token"]') {
+        return { waitFor: async () => {} }
+      }
+      return { filter: () => ({ ...notices, first: () => notices }) }
+    },
+  }
+  const browserType = {
+    launch: async () => {
+      stats.launches += 1
+      return {
+        close: async () => {
+          stats.closed += 1
+        },
+        newContext: async () => {
+          stats.contexts += 1
+          return { newPage: async () => page }
+        },
+      }
+    },
+  }
+  return { browserType, stats }
+}
+
+function getTestInfo(options) {
+  return getInfo({ browserStateFile: null, ...options })
+}
 
 for (const [kind, messageFile, prefix] of [
   [
@@ -446,83 +488,43 @@ test("extracts matching DTEK notices and preserves their paragraphs", async () =
   })
 })
 
-test("closes the browser and reports a failed DTEK response", async () => {
-  let browserClosed = false
-  mock.method(globalThis, "fetch", async () => ({
-    ok: false,
-    status: 503,
-  }))
-  const browserPage = {
-    evaluate: async (callback, value) => callback(value),
-    goto: async () => {},
-    locator: () => ({
-      filter: () => ({
-        count: async () => 0,
-        first: () => ({
-          waitFor: async () => Promise.reject(Error("missing")),
-        }),
-      }),
-    }),
-    waitForSelector: async () => ({
-      getAttribute: async () => "csrf-token",
-    }),
-  }
-  const browserType = {
-    launch: async () => ({
-      close: async () => {
-        browserClosed = true
-      },
-      newPage: async () => browserPage,
-    }),
-  }
-
-  await assert.rejects(
-    getInfo({ browserType, retryMaxAttempts: 1 }),
-    /DTEK request failed with status 503/,
-  )
-  assert.equal(browserClosed, true)
+test("closes the browser and preserves the notice result after a failed address response", async () => {
+  const { browserType, stats } = createDtekBrowser()
+  const info = await getTestInfo({
+    browserType,
+    retryMaxAttempts: 1,
+    getAddressInfoFn: async () => {
+      throw Error("DTEK request failed with status 503.")
+    },
+  })
+  assert.equal(info.emergencyOutagesNotice, null)
+  assert.match(info.addressError.message, /DTEK request failed with status 503/)
+  assert.equal(stats.closed, 1)
 })
 
 test("retries a transient browser launch failure", async () => {
+  const { browserType, stats } = createDtekBrowser()
+  const launch = browserType.launch
   let launches = 0
   const delays = []
+  browserType.launch = async () => {
+    launches += 1
+    if (launches === 1) throw Error("browser unavailable")
+    return launch()
+  }
   const expectedInfo = createInfo("Аварійне")
-  const browserPage = {
-    evaluate: async () => expectedInfo,
-    goto: async () => {},
-    locator: () => ({
-      filter: () => ({
-        count: async () => 0,
-        first: () => ({
-          waitFor: async () => Promise.reject(Error("missing")),
-        }),
-      }),
-    }),
-    waitForSelector: async () => ({
-      getAttribute: async () => "csrf-token",
-    }),
-  }
-  const browserType = {
-    launch: async () => {
-      launches += 1
-      if (launches === 1) throw Error("browser unavailable")
-      return {
-        close: async () => {},
-        newPage: async () => browserPage,
-      }
-    },
-  }
-
   assert.deepEqual(
-    await getInfo({
+    await getTestInfo({
       browserType,
+      getAddressInfoFn: async () => expectedInfo,
       retryDelayMs: 10,
       retryMaxAttempts: 2,
       sleepFn: async (delay) => delays.push(delay),
     }),
-    { ...expectedInfo, emergencyOutagesNotice: null },
+    { ...expectedInfo, emergencyOutagesNotice: null }
   )
   assert.equal(launches, 2)
+  assert.equal(stats.closed, 1)
   assert.deepEqual(delays, [10])
 })
 
@@ -532,8 +534,7 @@ test("reports an uncertain emergency notice check instead of treating it as abse
       filter: () => ({
         count: async () => 1,
         first: () => ({
-          waitFor: async () =>
-            Promise.reject(Error("page became unavailable")),
+          waitFor: async () => Promise.reject(Error("page became unavailable")),
         }),
       }),
     }),
@@ -541,7 +542,7 @@ test("reports an uncertain emergency notice check instead of treating it as abse
 
   await assert.rejects(
     getEmergencyOutagesNotice(browserPage),
-    /Emergency outages notice check failed: page became unavailable/,
+    /Emergency outages notice check failed: page became unavailable/
   )
 })
 
@@ -550,42 +551,17 @@ test("collects a matching general DTEK notice", async () => {
   const expectedNotice = {
     segments: [{ bold: false, text: "Застосовано аварійні графіки" }],
   }
-  const notices = {
-    evaluateAll: async () => expectedNotice,
-    waitFor: async () => {},
-  }
-  const browserPage = {
-    evaluate: async () => expectedInfo,
-    goto: async () => {},
-    locator: (selector, options) => {
-      assert.equal(selector, ".m-attention__text")
-      assert.equal(options, undefined)
-
-      return {
-        filter: (filterOptions) => {
-          assert.deepEqual(filterOptions, { visible: true })
-          return {
-            ...notices,
-            first: () => notices,
-          }
-        },
-      }
-    },
-    waitForSelector: async () => ({
-      getAttribute: async () => "csrf-token",
+  const { browserType } = createDtekBrowser(expectedNotice)
+  assert.deepEqual(
+    await getTestInfo({
+      browserType,
+      getAddressInfoFn: async () => expectedInfo,
     }),
-  }
-  const browserType = {
-    launch: async () => ({
-      close: async () => {},
-      newPage: async () => browserPage,
-    }),
-  }
-
-  assert.deepEqual(await getInfo({ browserType }), {
-    ...expectedInfo,
-    emergencyOutagesNotice: expectedNotice,
-  })
+    {
+      ...expectedInfo,
+      emergencyOutagesNotice: expectedNotice,
+    }
+  )
 })
 
 test("deletes a Telegram notification only after a successful response", async () => {
@@ -1438,4 +1414,216 @@ test("does not call LLM when the modal is absent", async () => {
     checkIsScheduledFn: () => true,
   })
   assert.equal(called, false)
+})
+
+for (const failure of ["Incapsula", "HTTP", "JSON", "missing house"]) {
+  for (const noticePresent of [true, false]) {
+    test(`processes general notice=${noticePresent} despite ${failure}, preserving address state`, async (t) => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "dtek-partial-"))
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+      const localFile = (file) => path.join(directory, path.basename(file))
+      const addressState = { message_id: 123, date: 1 }
+      const removalState = { message_id: 456, date: 1 }
+      saveLastMessage(addressState, localFile(LAST_MESSAGE_FILE))
+      saveLastMessage(removalState, localFile(ADDRESS_REMOVAL_MESSAGE_FILE))
+      const notice = {
+        segments: [{ text: "Екстрені відключення у Києві", bold: false }],
+      }
+      const sent = []
+      const deleted = []
+      const saved = []
+      const { browserType, stats } = createDtekBrowser(
+        noticePresent ? notice : null
+      )
+      const info = await getTestInfo({
+        browserType,
+        getAddressInfoFn: async () =>
+          readAddressResponse({
+            ok: () => failure !== "HTTP",
+            status: () => (failure === "HTTP" ? 503 : 200),
+            text: async () => {
+              if (failure === "Incapsula") {
+                return '<html><script src="/_Incapsula_Resource?secret"></script></html>'
+              }
+              if (failure === "JSON") return "invalid JSON with private data"
+              return JSON.stringify({ result: true, data: {} })
+            },
+          }),
+        retryMaxAttempts: 2,
+        sleepFn: async () => {},
+      })
+      assert.equal(stats.visits, failure === "missing house" ? 1 : 2)
+      assert.equal(stats.launches, 1)
+      assert.equal(stats.contexts, 1)
+      assert.equal(stats.closed, 1)
+      if (failure === "Incapsula") {
+        assert.match(info.addressError.message, /Incapsula blocked/)
+        assert.doesNotMatch(info.addressError.message, /secret/)
+      }
+      if (failure === "JSON") {
+        assert.match(info.addressError.message, /invalid JSON/)
+        assert.doesNotMatch(info.addressError.message, /private data/)
+      }
+      await assert.rejects(
+        run({
+          now: new Date("2026-11-08T14:00:00Z"),
+          getInfoFn: async () => info,
+          analyzeEmergencyNoticeFn: async () => ({ status: "affected" }),
+          checkIsOutageFn: (value) => checkIsOutage(value, house),
+          loadEmergencyOutagesStateFn: () => true,
+          saveEmergencyOutagesStateFn: (value) => saved.push(value),
+          loadLastMessageFn: (file) => loadLastMessage(localFile(file)),
+          loadRemovalMessageFn: (file) => loadLastMessage(localFile(file)),
+          generateEmergencyOutagesMessageFn: () => "General notice",
+          sendNotificationFn: async (message, { lastMessageFile }) => {
+            sent.push(lastMessageFile)
+            saveLastMessage(
+              { message_id: 789, date: 1 },
+              localFile(lastMessageFile)
+            )
+          },
+          deleteLastNotificationFn: async ({ lastMessageFile }) => {
+            deleted.push(lastMessageFile)
+            fs.rmSync(localFile(lastMessageFile), { force: true })
+            return true
+          },
+        }),
+        failure === "missing house"
+          ? /configured house is missing/
+          : /Getting info failed/
+      )
+      assert.deepEqual(
+        sent,
+        noticePresent ? [EMERGENCY_OUTAGES_MESSAGE_FILE] : []
+      )
+      assert.deepEqual(
+        deleted,
+        noticePresent ? [] : [EMERGENCY_OUTAGES_MESSAGE_FILE]
+      )
+      assert.deepEqual(saved, [noticePresent])
+      assert.deepEqual(
+        loadLastMessage(localFile(LAST_MESSAGE_FILE)),
+        addressState
+      )
+      assert.deepEqual(
+        loadLastMessage(localFile(ADDRESS_REMOVAL_MESSAGE_FILE)),
+        removalState
+      )
+    })
+  }
+}
+
+test("does not use an earlier notice if the final page check fails", async () => {
+  let visits = 0
+  const { browserType, stats } = createDtekBrowser(
+    { segments: [{ text: "Earlier notice" }] },
+    async () => {
+      visits += 1
+      if (visits === 2) throw Error("page unavailable")
+    }
+  )
+  await assert.rejects(
+    getTestInfo({
+      browserType,
+      getAddressInfoFn: async () => {
+        throw Error("form unavailable")
+      },
+      retryMaxAttempts: 2,
+      sleepFn: async () => {},
+    }),
+    /page unavailable/
+  )
+  assert.equal(stats.closed, 1)
+})
+
+test("reuses the browser session when an address retry succeeds", async () => {
+  const { browserType, stats } = createDtekBrowser()
+  const expectedInfo = createInfo("Аварійне")
+  let attempts = 0
+  const info = await getTestInfo({
+    browserType,
+    getAddressInfoFn: async () => {
+      attempts += 1
+      if (attempts === 1) throw Error("Incapsula blocked the address request")
+      return expectedInfo
+    },
+    retryMaxAttempts: 2,
+    sleepFn: async () => {},
+  })
+  assert.deepEqual(info, { ...expectedInfo, emergencyOutagesNotice: null })
+  assert.deepEqual(stats, { launches: 1, contexts: 1, visits: 2, closed: 1 })
+})
+
+test("loads and saves the browser session across separate checks", async (t) => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "dtek-check-session-")
+  )
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const file = path.join(directory, "state.json")
+  const session = {
+    cookies: [
+      { name: "session", value: "private", domain: ".dtek-kem.com.ua" },
+    ],
+    origins: [],
+  }
+  const options = []
+  for (let check = 0; check < 2; check += 1) {
+    const { browserType, stats } = createDtekBrowser()
+    const launch = browserType.launch
+    browserType.launch = async () => {
+      const browser = await launch()
+      const newContext = browser.newContext
+      browser.newContext = async (value) => {
+        options.push(value)
+        const context = await newContext()
+        context.storageState = async () => structuredClone(session)
+        return context
+      }
+      return browser
+    }
+    await getTestInfo({
+      browserType,
+      browserStateFile: file,
+      getAddressInfoFn: async () => createInfo(),
+    })
+    assert.equal(stats.closed, 1)
+  }
+  assert.deepEqual(options[0], {
+    locale: "uk-UA",
+    timezoneId: "Europe/Kyiv",
+    storageState: undefined,
+  })
+  assert.deepEqual(options[1].storageState, session)
+})
+
+test("discards a session rejected by Chromium without losing the check", async (t) => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "dtek-invalid-session-")
+  )
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const file = path.join(directory, "state.json")
+  fs.writeFileSync(file, JSON.stringify({ cookies: [{}], origins: [] }))
+  const { browserType, stats } = createDtekBrowser()
+  const launch = browserType.launch
+  let attempts = 0
+  browserType.launch = async () => {
+    const browser = await launch()
+    const newContext = browser.newContext
+    browser.newContext = async (options) => {
+      attempts += 1
+      if (options.storageState) throw Error("invalid cookie")
+      const context = await newContext()
+      context.storageState = async () => ({ cookies: [], origins: [] })
+      return context
+    }
+    return browser
+  }
+  const info = await getTestInfo({
+    browserType,
+    browserStateFile: file,
+    getAddressInfoFn: async () => createInfo(),
+  })
+  assert.equal(info.addressError, undefined)
+  assert.equal(attempts, 2)
+  assert.equal(stats.closed, 1)
 })
