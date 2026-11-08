@@ -14,7 +14,6 @@ import {
 import { log, warn } from "./logger.js"
 
 export const MAX_NOTICE_CHARS = 16000
-const CACHE_TTL_MS = 10 * 60 * 1000
 const PROMPT_VERSION = 1
 const UNKNOWN = {
   status: "unknown",
@@ -205,9 +204,12 @@ export async function analyzeEmergencyNotice(
     try {
       const cached = JSON.parse(fs.readFileSync(cacheFile, "utf8"))
       const age = now.getTime() - cached.createdAt
-      if (cached.key === key && age >= 0 && age < CACHE_TTL_MS) {
+      if (cached.key === key && age >= 0) {
         const result = parseModelResponse(JSON.stringify(cached.result), text)
-        if (result.status !== "unknown") return result
+        if (result.status !== "unknown") {
+          log(`🤖 Використано кеш перевірки LLM: ${result.status}.`)
+          return result
+        }
       }
     } catch {
       // A missing or corrupt cache is a cache miss, not an outage decision.

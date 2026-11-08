@@ -171,7 +171,41 @@ test("uses the configured endpoint, model and JSON mode; caches valid responses"
   assert.ok(!fs.readFileSync(options.cacheFile, "utf8").includes(options.apiKey))
 })
 
-test("rechecks changed inputs, expired cache, Kyiv midnight and corrupt cache", async (t) => {
+for (const status of ["affected", "not_affected"]) {
+  test(`reuses persisted ${status} decisions beyond ten minutes on the same Kyiv date`, async (t) => {
+    const result = {
+      ...affected,
+      status,
+      coverage: status === "affected" ? "full" : "none",
+    }
+    let requests = 0
+    const { options } = setup(t, {
+      fetchFn: async () => {
+        requests += 1
+        return modelResponse(result)
+      },
+    })
+    assert.deepEqual(await analyzeEmergencyNotice(text, options), result)
+    const persisted = fs.readFileSync(options.cacheFile, "utf8")
+    for (const elapsed of [10 * 60 * 1000, 9 * 60 * 60 * 1000]) {
+      assert.deepEqual(
+        await analyzeEmergencyNotice(text, {
+          ...options,
+          now: new Date(now.getTime() + elapsed),
+        }),
+        result,
+      )
+    }
+    assert.equal(requests, 1)
+    assert.equal(fs.readFileSync(options.cacheFile, "utf8"), persisted)
+    assert.match(
+      console.log.mock.calls.at(-1).arguments.join(" "),
+      /Використано кеш перевірки LLM/,
+    )
+  })
+}
+
+test("rechecks changed inputs, clock rollback, Kyiv midnight and corrupt cache", async (t) => {
   const { options, calls } = setup(t)
   await analyzeEmergencyNotice(text, options)
   for (const change of [
@@ -179,7 +213,6 @@ test("rechecks changed inputs, expired cache, Kyiv midnight and corrupt cache", 
     { baseUrl: "https://other.example/v1" },
     { district: "Дарницький" },
     { bank: "right", district: "Оболонський" },
-    { now: new Date(now.getTime() + 10 * 60 * 1000) },
     { now: new Date(now.getTime() - 1000) },
   ]) {
     await analyzeEmergencyNotice(text, options)
@@ -197,11 +230,12 @@ test("rechecks changed inputs, expired cache, Kyiv midnight and corrupt cache", 
     ...options,
     now: new Date("2026-11-05T21:59:00Z"),
   })
+  assert.equal(calls.length, before + 2)
   await analyzeEmergencyNotice(text, {
     ...options,
     now: new Date("2026-11-05T22:01:00Z"),
   })
-  assert.equal(calls.length, before + 4)
+  assert.equal(calls.length, before + 3)
 })
 
 test("does not reuse cached unknown or invalid evidence", async (t) => {
