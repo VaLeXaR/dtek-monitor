@@ -37,7 +37,7 @@ export const DTEK_BROWSER_STATE_FILE = path.resolve(
   process.env.DTEK_BROWSER_STATE_FILE || ".cache/dtek-browser-state.json",
 )
 export const TELEGRAM_MESSAGE_TITLE =
-  "<b>Повідомлення з сайту ДТЕК Київські Електромережі</b>"
+  "<b>🚨 Повідомлення з сайту ДТЕК Київські Електромережі</b>"
 
 export const RETRY_MAX_ATTEMPTS = readInteger("RETRY_MAX_ATTEMPTS", 3, {
   min: 1,

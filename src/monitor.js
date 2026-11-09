@@ -395,7 +395,7 @@ const REMOVAL_MESSAGE_LIFETIME_SECONDS = 36 * 60 * 60
 
 const REMOVAL_MESSAGE_SUFFIX =
   "Це не означає, що світло повернулося. Будь ласка, розумно споживайте електроенергію — це допоможе зменшити навантаження на мережу та уникнути екстрених відключень."
-const GENERAL_REMOVAL_MESSAGE = `Повідомлення про загальні екстренні/аварійні відключення прибрані з сайту ДТЕК. ${REMOVAL_MESSAGE_SUFFIX}`
+const GENERAL_REMOVAL_MESSAGE = `Повідомлення про загальні екстрені/аварійні відключення прибране з сайту ДТЕК. ${REMOVAL_MESSAGE_SUFFIX}`
 const ADDRESS_REMOVAL_MESSAGE = `Повідомлення про адресне відключення прибране з сайту ДТЕК. ${REMOVAL_MESSAGE_SUFFIX}`
 
 function hasNotificationReachedRotationAge(lastMessage, now) {

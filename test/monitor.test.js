@@ -77,7 +77,7 @@ for (const [kind, messageFile, prefix] of [
   [
     "general",
     EMERGENCY_OUTAGES_MESSAGE_FILE,
-    "Повідомлення про загальні екстренні/аварійні відключення прибрані з сайту ДТЕК.",
+    "Повідомлення про загальні екстрені/аварійні відключення прибране з сайту ДТЕК.",
   ],
   [
     "address",
@@ -350,7 +350,7 @@ test("escapes address and DTEK values in an outage message", () => {
 
   assert.match(
     message,
-    /^<b>Повідомлення з сайту ДТЕК Київські Електромережі<\/b>\n\n/,
+    /^<b>🚨 Повідомлення з сайту ДТЕК Київські Електромережі<\/b>\n\n/,
   )
   assert.match(message, /Street &amp; &lt;name&gt;/)
   assert.match(message, /10:00 &amp; later/)
@@ -394,7 +394,7 @@ test("escapes a general emergency outages notice", () => {
 
   assert.match(
     message,
-    /^<b>Повідомлення з сайту ДТЕК Київські Електромережі<\/b>\n\nWarning &lt;all&gt; &amp; everyone/,
+    /^<b>🚨 Повідомлення з сайту ДТЕК Київські Електромережі<\/b>\n\nWarning &lt;all&gt; &amp; everyone/,
   )
   assert.match(message, /12:05 08\.10\.2026/)
 })
